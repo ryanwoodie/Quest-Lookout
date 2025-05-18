@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build lookout.cpp (Oculus)",
+      "type": "shell",
+      "command": "cl.exe",
+      "args": [
+        "/EHsc",
+        "lookout.cpp",
+        "/I", "C:/OculusSDK/LibOVR/Include",
+        "/link",
+        "/LIBPATH:C:/OculusSDK/LibOVR/Lib/Windows/x64/Release",
+        "LibOVR.lib",
+        "/OUT:lookout.exe"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile"],
+      "detail": "Compile lookout.cpp with Oculus SDK"
+    }
+  ]
+}
