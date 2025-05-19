@@ -363,20 +363,20 @@ int main() {
                     target_volume = static_cast<int>(config.start_volume + ramp_progress * (config.end_volume - config.start_volume));
                 }
 
-                if (state.repeat_timer_ms >= config.repeat_interval_ms &&
-                    (!state.sound_player || state.sound_player->getStatus() == sf::SoundSource::Status::Stopped)) {
-                    if (state.sound_player) {
-                        delete state.sound_player;
-                        state.sound_player = nullptr;
-                    }
-                    state.sound_player = get_or_create_sound_player(config.audio_file);
-                    if (state.sound_player) {
-                        state.sound_player->setVolume(static_cast<float>(target_volume));
-                        state.sound_player->play();
-                        std::cout << "[DEBUG] Alarm " << i << ": Sound player (re)started for active warning (repeat)." << std::endl;
-                    }
-                    state.repeat_timer_ms = 0.0;
-                }
+                if (state.repeat_timer_ms >= config.repeat_interval_ms) {
+    if (state.sound_player) {
+        state.sound_player->stop();
+        delete state.sound_player;
+        state.sound_player = nullptr;
+    }
+    state.sound_player = get_or_create_sound_player(config.audio_file);
+    if (state.sound_player) {
+        state.sound_player->setVolume(static_cast<float>(target_volume));
+        state.sound_player->play();
+        std::cout << "[DEBUG] Alarm " << i << ": Sound player force-restarted for active warning (repeat)." << std::endl;
+    }
+    state.repeat_timer_ms = 0.0;
+}
 
                 if (state.sound_player) {
                     if (elapsed_time_ms < state.alarm_silence_until_ms) { 
