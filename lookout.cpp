@@ -17,7 +17,9 @@
 #include <fstream>
 #include "json.hpp" 
 #include <SFML/Audio.hpp>
-#include <windows.h> 
+#include <windows.h>
+#include <shellapi.h> // For Shell_NotifyIcon
+#include <thread>       // For std::thread 
 #include <SFML/System/Time.hpp>
 #include <SFML/System/FileInputStream.hpp>
 
@@ -107,30 +109,136 @@ sf::Music* get_or_create_sound_player(const std::string& audio_file) {
     return music.release();
 }
 
+// Defines for tray icon
+#define WM_APP_TRAYMSG (WM_APP + 1)
+#define ID_TRAY_APP_ICON 1001
+#define ID_TRAY_EXIT_CONTEXT_MENU_ITEM 1002
+
+const char* const WINDOW_CLASS_NAME = "QuestLookoutWindowClass";
+HWND g_hwnd;
+NOTIFYICONDATA nidApp;
+
 // Forward declaration for our core application logic
-int app_core_logic(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow);
+int app_core_logic(); // Signature changed for threading
+
+// Window Procedure
+LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+        case WM_APP_TRAYMSG:
+            switch (lParam) // The lParam holds the mouse event for tray icons
+            {
+                case WM_RBUTTONUP: // Right-click
+                {
+                    POINT curPoint;
+                    GetCursorPos(&curPoint);
+                    HMENU hPopupMenu = CreatePopupMenu();
+                    InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT_CONTEXT_MENU_ITEM, "Exit");
+                    
+                    // --- Fix for persistent context menu ---
+                    SetForegroundWindow(hwnd); // Make our window the foreground window
+                    // ----------------------------------------
+
+                    TrackPopupMenu(hPopupMenu, TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_LEFTBUTTON, curPoint.x, curPoint.y, 0, hwnd, NULL);
+                    DestroyMenu(hPopupMenu);
+
+                    // --- Fix for persistent context menu (part 2) ---
+                    PostMessage(hwnd, WM_NULL, 0, 0); // Post a dummy message to ensure the menu closes properly
+                    // ---------------------------------------------
+                }
+                return 0;
+                // case WM_LBUTTONDBLCLK: // Double-click (for future use, e.g., show settings/log)
+                // ShowWindow(hwnd, SW_RESTORE); // Example: if we had a visible window
+                // break;
+            }
+            break;
+
+        case WM_COMMAND: // Sent when a menu item is clicked
+            if (LOWORD(wParam) == ID_TRAY_EXIT_CONTEXT_MENU_ITEM)
+            {
+                DestroyWindow(hwnd); // This will trigger WM_DESTROY
+            }
+            break;
+
+        case WM_DESTROY:
+            Shell_NotifyIcon(NIM_DELETE, &nidApp); // Remove icon from tray
+            PostQuitMessage(0); // Signals the main message loop to exit
+            break;
+
+        default:
+            return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+    return 0;
+}
 
 // Windows Subsystem Entry Point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    // Mark parameters as unused for now. nCmdShow might be used if we create an initial window.
-    UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
+    UNREFERENCED_PARAMETER(lpCmdLine); // lpCmdLine might be used for app arguments
 
-    // For now, directly call the original main logic.
-    // In future steps, this WinMain will handle creating an invisible window,
-    // setting up the tray icon, running a message loop, and launching
-    // app_core_logic in a separate thread.
-    return app_core_logic(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
+    WNDCLASSEX wc = {0};
+    wc.cbSize        = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc   = WndProc;
+    wc.hInstance     = hInstance;
+    wc.lpszClassName = WINDOW_CLASS_NAME;
+    wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION); // Default icon
+    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+    // wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1); // Not needed for an invisible window
+
+    if (!RegisterClassEx(&wc))
+    {
+        MessageBox(NULL, "Window Registration Failed!", "Error!", MB_ICONEXCLAMATION | MB_OK);
+        return 0;
+    }
+
+    g_hwnd = CreateWindowEx(
+        0,                              // Optional window styles.
+        WINDOW_CLASS_NAME,              // Window class
+        "Quest Lookout Hidden Window",  // Window text (not visible)
+        0,                              // Window style (not visible)
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, // Size and position (not relevant for hidden)
+        NULL,       // Parent window    
+        NULL,       // Menu
+        hInstance,  // Instance handle
+        NULL        // Additional application data
+    );
+
+    if (g_hwnd == NULL)
+    {
+        MessageBox(NULL, "Window Creation Failed!", "Error!", MB_ICONEXCLAMATION | MB_OK);
+        return 0;
+    }
+
+    // Setup the tray icon
+    nidApp.cbSize = sizeof(NOTIFYICONDATA);
+    nidApp.hWnd = g_hwnd;
+    nidApp.uID = ID_TRAY_APP_ICON;
+    nidApp.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nidApp.uCallbackMessage = WM_APP_TRAYMSG;
+    nidApp.hIcon = LoadIcon(NULL, IDI_APPLICATION); // Use a default icon for now
+    strcpy_s(nidApp.szTip, "Quest Lookout"); // Tooltip text
+
+    Shell_NotifyIcon(NIM_ADD, &nidApp);
+
+    // Launch the core application logic in a separate thread
+    std::thread core_logic_thread(app_core_logic);
+    core_logic_thread.detach(); // Detach the thread to run independently
+
+    // Run the message loop.
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0) > 0) // GetMessage returns > 0 for messages other than WM_QUIT
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    return (int)msg.wParam;
 }
 
 // Renamed original main function, now app_core_logic
-int app_core_logic(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+int app_core_logic() // Signature updated for threading
 {
-    UNREFERENCED_PARAMETER(hInstance);
-    UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
-    UNREFERENCED_PARAMETER(nCmdShow);
     ovrResult result = ovr_Initialize(nullptr);
     if (OVR_FAILURE(result)) { std::cerr << "OVR Init Fail" << std::endl; return 1; }
 
