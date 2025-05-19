@@ -115,6 +115,41 @@ int main() {
 
     std::vector<LookoutAlarmConfig> alarms = load_configs("settings.json");
     if (alarms.empty()) { std::cerr << "No Alarms Loaded" << std::endl; ovr_Destroy(session); ovr_Shutdown(); return 1; }
+
+    // --- Condor log monitoring setup ---
+    std::string condor_log_path = "C:\\Condor3\\Logs\\Logfile.txt";
+    {
+        std::ifstream f("settings.json");
+        if (f) {
+            nlohmann::json j;
+            try { f >> j; } catch (...) {}
+            if (j.contains("condor_log_path")) {
+                condor_log_path = j["condor_log_path"].get<std::string>();
+            }
+        }
+    }
+    std::cout << "[INFO] Monitoring Condor log at: " << condor_log_path << std::endl;
+
+    auto is_flight_active = [](const std::string& log_path) -> bool {
+        std::ifstream log(log_path, std::ios::in | std::ios::binary); // Use binary mode
+        if (!log) return false;
+        std::string line;
+        std::string last_relevant_event_type;
+        while (std::getline(log, line)) {
+            if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
+                last_relevant_event_type = "ENTERED";
+            } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
+                last_relevant_event_type = "LEAVING";
+            }
+        }
+        return last_relevant_event_type == "ENTERED";
+    };
+    bool condor_flight_active = is_flight_active(condor_log_path);
+    std::streampos last_log_pos = 0;
+    {
+        std::ifstream log_check(condor_log_path, std::ios::in | std::ios::ate | std::ios::binary); // Use binary mode
+        if (log_check) last_log_pos = log_check.tellg();
+    }
     
     std::cout << "Oculus Lookout Utility started. Press Ctrl+C to quit." << std::endl;
     for (size_t i = 0; i < alarms.size(); ++i) { 
@@ -184,6 +219,84 @@ int main() {
     std::vector<AlarmState> alarm_states(alarms.size());
 
     while (true) {
+        // --- Monitor Condor log for flight status ---
+        bool previous_iteration_flight_status = condor_flight_active;
+
+        std::ifstream log_stream(condor_log_path, std::ios::in | std::ios::ate | std::ios::binary);
+
+        if (log_stream) {
+            std::streampos current_file_size = log_stream.tellg();
+
+            if (current_file_size < last_log_pos) { // Log was truncated or rotated
+                last_log_pos = 0; // Reset to trigger a full re-scan
+            }
+
+            std::string latest_event_type_found_in_scan = ""; // "ENTERED" or "LEAVING"
+
+            if (last_log_pos == 0 && current_file_size > 0) { // Need to scan the whole file
+                log_stream.clear(); 
+                log_stream.seekg(0, std::ios::beg);
+                std::string line;
+                while (std::getline(log_stream, line)) {
+                    if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
+                        latest_event_type_found_in_scan = "ENTERED";
+                    } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
+                        latest_event_type_found_in_scan = "LEAVING";
+                    }
+                }
+            } else if (current_file_size > last_log_pos) { // New content added
+                log_stream.clear(); 
+                log_stream.seekg(last_log_pos, std::ios::beg);
+                std::string line;
+                while (std::getline(log_stream, line)) { // Read only new lines
+                    if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
+                        latest_event_type_found_in_scan = "ENTERED";
+                    } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
+                        latest_event_type_found_in_scan = "LEAVING";
+                    }
+                }
+            }
+
+            // Update condor_flight_active based on what was found
+            if (!latest_event_type_found_in_scan.empty()) {
+                if (latest_event_type_found_in_scan == "ENTERED") {
+                    condor_flight_active = true;
+                } else if (latest_event_type_found_in_scan == "LEAVING") {
+                    condor_flight_active = false;
+                }
+            } else {
+                // If a full scan (last_log_pos was 0) yielded no relevant events, it means inactive.
+                // Or if the file became empty.
+                if ((last_log_pos == 0 && current_file_size > 0) || current_file_size == 0) {
+                     condor_flight_active = false;
+                }
+                // If only new lines were scanned and they had no relevant events, condor_flight_active remains unchanged from previous state.
+            }
+            last_log_pos = current_file_size; // Update for the next iteration
+
+        } else { // Log file not accessible
+            if (condor_flight_active) { // If it was active and now log is gone
+                condor_flight_active = false;
+            }
+        }
+
+        // After determining the current state, compare with the state from the start of this iteration
+        if (condor_flight_active != previous_iteration_flight_status) {
+            if (condor_flight_active) {
+                std::cout << "[INFO] Detected Condor flight start." << std::endl;
+            } else {
+                std::cout << "[INFO] Detected Condor flight end." << std::endl;
+            }
+        }
+
+
+        // --- Only run detection/alarms if flight is active and headset tracked ---
+        if (!condor_flight_active) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
+            elapsed_time_ms += POLL_INTERVAL * 1000.0;
+            continue;
+        }
+
         double displayTime = ovr_GetPredictedDisplayTime(session, 0);
         ovrTrackingState ts = ovr_GetTrackingState(session, displayTime, ovrTrue);
         if (!(ts.StatusFlags & ovrStatus_OrientationTracked)) { 
