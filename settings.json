@@ -1,12 +1,28 @@
 {
-    "min_horizontal_angle": 60.0,
-    "min_vertical_angle": 10.0,
-    "max_time_ms": 10000,
-    "audio_file": "",
-    "start_volume": 5,
-    "end_volume": 100,
-    "volume_ramp_time_ms": 30000,
-    "repeat_interval_ms": 2000,
-  "silence_after_look_ms": 5000,
-    "min_lookout_time_ms": 2000
+  "alarms": [
+    {
+      "min_horizontal_angle": 60.0,
+      "min_vertical_angle": 10.0,
+      "max_time_ms": 30000,
+      "audio_file": "",
+      "start_volume": 5,
+      "end_volume": 100,
+      "volume_ramp_time_ms": 30000,
+      "repeat_interval_ms": 2000,
+      "silence_after_look_ms": 5000,
+      "min_lookout_time_ms": 2000
+    },
+    {
+      "min_horizontal_angle": 90.0,
+      "min_vertical_angle": 15.0,
+      "max_time_ms": 60000,
+      "audio_file": "beep.wav",
+      "start_volume": 10,
+      "end_volume": 100,
+      "volume_ramp_time_ms": 60000,
+      "repeat_interval_ms": 5000,
+      "silence_after_look_ms": 10000,
+      "min_lookout_time_ms": 1500
+    }
+  ]
 }

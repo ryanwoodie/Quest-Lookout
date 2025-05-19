@@ -21,16 +21,16 @@
 #include <SFML/Audio.hpp> // For audio playback with volume control
 
 struct LookoutAlarmConfig {
-    double min_horizontal_angle = 60.0; // degrees (±30)
+    double min_horizontal_angle = 120.0; // degrees (±30)
     double min_vertical_angle = 20.0;   // degrees (±10)
-    int max_time_ms = 2000;             // ms
+    int max_time_ms = 60000;             // ms
     std::string audio_file;             // Path to audio file (empty = beep)
-    int start_volume = 50;              // 0-100
+    int start_volume = 5;              // 0-100
     int end_volume = 100;               // 0-100
-    int volume_ramp_time_ms = 1000;     // ms
-    int repeat_interval_ms = 2000;      // ms
+    int volume_ramp_time_ms = 30000;     // ms
+    int repeat_interval_ms = 5000;      // ms
     int min_lookout_time_ms = 2000;     // Minimum time to hold lookout (ms)
-    int silence_after_look_ms = 2000;   // ms to silence alarm after L or R cleared
+    int silence_after_look_ms = 5000;   // ms to silence alarm after L or R cleared
 
     // Serialize/deserialize with nlohmann::json
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(LookoutAlarmConfig,
@@ -61,16 +61,20 @@ void quat_to_yaw_pitch(const ovrQuatf& q, double& yaw_deg, double& pitch_deg) {
     pitch_deg = rad2deg(std::asin(ps));
 }
 
-// Load config from file
-LookoutAlarmConfig load_config(const std::string& filename) {
-    LookoutAlarmConfig cfg;
+// Load config from file (multiple alarms)
+std::vector<LookoutAlarmConfig> load_configs(const std::string& filename) {
+    std::vector<LookoutAlarmConfig> cfgs;
     std::ifstream f(filename);
     if (f) {
         nlohmann::json j;
         f >> j;
-        cfg = j.get<LookoutAlarmConfig>();
+        if (j.contains("alarms")) {
+            for (const auto& item : j["alarms"]) {
+                cfgs.push_back(item.get<LookoutAlarmConfig>());
+            }
+        }
     }
-    return cfg;
+    return cfgs;
 }
 
 // Save config to file
@@ -135,27 +139,38 @@ int main() {
         return 1;
     }
 
-    // Load config
-    LookoutAlarmConfig config = load_config("settings.json");
-    // Robust guard for repeat interval
-    if (config.repeat_interval_ms < 100) {
-        std::cerr << "[WARNING] repeat_interval_ms invalid or missing, defaulting to 2000 ms\n";
-        config.repeat_interval_ms = 2000;
+    // Load all alarm configs
+    std::vector<LookoutAlarmConfig> alarms = load_configs("settings.json");
+    if (alarms.empty()) {
+        std::cerr << "[ERROR] No alarms loaded from settings.json! Exiting." << std::endl;
+        return 1;
     }
-    double min_horiz = config.min_horizontal_angle / 2.0; // ±half
-    double min_vert = config.min_vertical_angle / 2.0;     // ±half
-    double noLookTime = 0.0;
     std::cout << "Oculus Lookout Utility started. Press Ctrl+C to quit." << std::endl;
-    std::cout << "[INFO] Warning repeat interval: " << config.repeat_interval_ms << " ms\n";
+    for (size_t i = 0; i < alarms.size(); ++i) {
+        if (alarms[i].repeat_interval_ms < 100) {
+            std::cerr << "[WARNING] [Alarm " << i << "] repeat_interval_ms invalid or missing, defaulting to 2000 ms\n";
+            alarms[i].repeat_interval_ms = 2000;
+        }
+    }
+    for (const auto& alarm : alarms) {
+        std::cout << "[INFO] Warning repeat interval: " << alarm.repeat_interval_ms << " ms\n";
+    }
 
-    // Rolling window for median center
-    const size_t WINDOW_SIZE = 1200; // 2 minutes if POLL_INTERVAL=0.1s
-
+    // Rolling window for median center (shared for all alarms)
+    const size_t WINDOW_SIZE = 600; // 2 minutes if POLL_INTERVAL=0.1s
     std::deque<double> yaw_window, pitch_window;
-    bool warning_triggered = false;
-    double repeat_timer = 0.0;
-    double warning_start_time = 0.0;
     double elapsed_time = 0.0;
+
+    // Per-alarm state structs
+    struct AlarmState {
+        bool warning_triggered = false;
+        double noLookTime = 0.0, repeat_timer = 0.0, warning_start_time = 0.0;
+        bool looked_left = false, looked_right = false, looked_up = false, looked_down = false;
+        bool prev_looked_left = false, prev_looked_right = false;
+        double alarm_silence_until = 0.0;
+        double left_look_time = -1.0, right_look_time = -1.0;
+    };
+    std::vector<AlarmState> alarm_states(alarms.size());
 
     while (true) {
         // Get tracking state
@@ -165,7 +180,6 @@ int main() {
         ovrQuatf q = pose.Orientation;
         double yaw_deg, pitch_deg;
         quat_to_yaw_pitch(q, yaw_deg, pitch_deg);
-
 
         // Compute current center using IQR (interquartile range) median
         double center_yaw = 0.0, center_pitch = 0.0;
@@ -195,100 +209,119 @@ int main() {
         double dpitch = clamp_angle(pitch_deg - center_pitch);
 
         // --- Lookout scan logic: must look past both sides (horiz & vert) before timer resets ---
-        static bool looked_left = false, looked_right = false, looked_up = false, looked_down = false;
-        static bool prev_looked_left = false, prev_looked_right = false;
-        static double alarm_silence_until = 0.0; // ms since start
+        for (size_t i = 0; i < alarms.size(); ++i) {
+            AlarmState& state = alarm_states[i];
+            const LookoutAlarmConfig& config = alarms[i];
 
-        // Always update rolling window for center with current head orientation
-        yaw_window.push_back(yaw_deg);
-        pitch_window.push_back(pitch_deg);
-        if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
-        if (pitch_window.size() > WINDOW_SIZE) pitch_window.pop_front();
+            // Always update rolling window for center with current head orientation
+            yaw_window.push_back(yaw_deg);
+            pitch_window.push_back(pitch_deg);
+            if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
+            if (pitch_window.size() > WINDOW_SIZE) pitch_window.pop_front();
 
-        // Save previous L/R before updating
-        bool prev_looked_left_tmp = looked_left;
-        bool prev_looked_right_tmp = looked_right;
+            // Save previous L/R before updating
+            bool prev_looked_left_tmp = state.looked_left;
+            bool prev_looked_right_tmp = state.looked_right;
 
-        // Track lookouts
-        if (dyaw < -min_horiz) looked_left = true;
-        if (dyaw >  min_horiz) looked_right = true;
-        if (dpitch < -min_vert) looked_down = true;
-        if (dpitch >  min_vert) looked_up = true;
+            // Track lookouts
+            // Set flags and record the first time they're set
+            if (dyaw < -config.min_horizontal_angle && !state.looked_left) {
+                state.looked_left = true;
+                state.left_look_time = elapsed_time;
+            }
+            if (dyaw >  config.min_horizontal_angle && !state.looked_right) {
+                state.looked_right = true;
+                state.right_look_time = elapsed_time;
+            }
+            if (dpitch < -config.min_vertical_angle) state.looked_down = true;
+            if (dpitch >  config.min_vertical_angle) state.looked_up = true;
 
-        // Update previous L/R for next iteration
-        prev_looked_left = prev_looked_left_tmp;
-        prev_looked_right = prev_looked_right_tmp;
+            // Update previous L/R for next iteration
+            state.prev_looked_left = prev_looked_left_tmp;
+            state.prev_looked_right = prev_looked_right_tmp;
 
-        // Throttled debug output (print once per second)
-        static double last_debug_time = 0.0;
-        if (elapsed_time - last_debug_time >= 1000.0) {
-            std::cout << "[DEBUG] dyaw: " << dyaw << ", dpitch: " << dpitch
-                      << " | center_yaw: " << center_yaw << ", center_pitch: " << center_pitch
-                      << " | noLookTime: " << noLookTime
-                      << " | L:" << looked_left << " R:" << looked_right
-                      << " U:" << looked_up << " D:" << looked_down
-                      << " | warning_triggered: " << warning_triggered
-                      << " | repeat_timer: " << repeat_timer << std::endl;
-            last_debug_time = elapsed_time;
-        }
-
-        // Always increment timer
-        noLookTime += POLL_INTERVAL * 1000.0; // ms
-
-        // If all lookouts completed, reset timer and flags
-        if (looked_left && looked_right && looked_up && looked_down) {
-            noLookTime = 0.0;
-            warning_triggered = false;
-            repeat_timer = 0.0;
-            warning_start_time = 0.0;
-            looked_left = looked_right = looked_up = looked_down = false;
-            std::cout << "[DEBUG] Lookout flags reset after successful lookout." << std::endl;
-        } else {
-            // Check for L/R flag set after alarm is repeating (0 -> 1)
-            if (warning_triggered && ((!prev_looked_left && looked_left) || (!prev_looked_right && looked_right))) {
-                alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                std::cout << "[DEBUG] Alarm silenced for " << config.silence_after_look_ms << " ms after L or R set (0->1)." << std::endl;
+            // Throttled debug output (print once per second)
+            static double last_debug_time = 0.0;
+            if (elapsed_time - last_debug_time >= 1000.0) {
+                std::cout << "[DEBUG] Alarm " << i << ": dyaw: " << dyaw << ", dpitch: " << dpitch
+                          << " | center_yaw: " << center_yaw << ", center_pitch: " << center_pitch
+                          << " | noLookTime: " << state.noLookTime
+                          << " | L:" << state.looked_left << " R:" << state.looked_right
+                          << " U:" << state.looked_up << " D:" << state.looked_down
+                          << " | warning_triggered: " << state.warning_triggered
+                          << " | repeat_timer: " << state.repeat_timer << std::endl;
+                last_debug_time = elapsed_time;
             }
 
-            if (!warning_triggered && noLookTime >= config.max_time_ms) {
-                warning_triggered = true;
-                repeat_timer = 0.0;
-                warning_start_time = elapsed_time;
-                int cur_volume = config.start_volume;
-                // Reset lookout flags after warning so user can start a fresh cycle
-                looked_left = looked_right = looked_up = looked_down = false;
-                std::cout << "[DEBUG] Lookout flags reset after warning triggered." << std::endl;
-                // Optionally reset timer to avoid immediate repeat (more forgiving UX)
-                noLookTime = 0.0;
-                std::cout << "[WARNING] Please perform a visual lookout!\n"
-                          << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
-                          << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
-                          << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
-                          << "    Volume: " << cur_volume << std::endl;
-                std::cout << "[DEBUG] Warning triggered!" << std::endl;
-                play_alarm_sound(config.audio_file, cur_volume);
-            } else if (warning_triggered) {
-                repeat_timer += POLL_INTERVAL * 1000.0;
-                double ramp_elapsed = elapsed_time - warning_start_time;
-                int cur_volume = config.start_volume;
-                if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
-                    double ramp = (std::min)(1.0, ramp_elapsed / config.volume_ramp_time_ms);
-                    cur_volume = (int)(config.start_volume + ramp * (config.end_volume - config.start_volume));
+            // Always increment timer
+            state.noLookTime += POLL_INTERVAL * 1000.0; // ms
+
+            // If all lookouts completed, check min_lookout_time_ms between L/R
+            if (state.looked_left && state.looked_right && state.looked_up && state.looked_down) {
+                double lr_time_diff = std::abs(state.left_look_time - state.right_look_time);
+                if (lr_time_diff >= config.min_lookout_time_ms) {
+                    state.noLookTime = 0.0;
+                    state.warning_triggered = false;
+                    state.repeat_timer = 0.0;
+                    state.warning_start_time = 0.0;
+                    state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
+                    state.left_look_time = state.right_look_time = -1.0;
+                    std::cout << "[DEBUG] Alarm " << i << ": Lookout flags reset after successful lookout. L/R time diff: " << lr_time_diff << " ms" << std::endl;
+                } else {
+                    // Only print once per failed attempt, then reset flags/timestamps
+                    std::cout << "[DEBUG] Alarm " << i << ": Lookout not counted: L/R time diff too short (" << lr_time_diff << " ms < " << config.min_lookout_time_ms << " ms)" << std::endl;
+                    state.looked_left = state.looked_right = false;
+                    state.left_look_time = state.right_look_time = -1.0;
+                    // Keep up/down flags so user doesn't have to repeat those
                 }
-                if (repeat_timer >= config.repeat_interval_ms) {
-                    if (elapsed_time < alarm_silence_until) {
-                        // Alarm is silenced
-                        std::cout << "[DEBUG] Alarm silenced, skipping repeat warning." << std::endl;
-                    } else {
-                        std::cout << "[WARNING] Please perform a visual lookout! (repeat)\n"
-                                  << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
-                                  << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
-                                  << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
-                                  << "    Volume: " << cur_volume << std::endl;
-                        std::cout << "[DEBUG] Repeat warning triggered!" << std::endl;
-                        play_alarm_sound(config.audio_file, cur_volume);
+            } else {
+                // Check for L/R flag set after alarm is repeating (0 -> 1)
+                if (state.warning_triggered && ((!state.prev_looked_left && state.looked_left) || (!state.prev_looked_right && state.looked_right))) {
+                    state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
+                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L or R set (0->1)." << std::endl;
+                }
+
+                if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
+                    state.left_look_time = state.right_look_time = -1.0; // reset if warning triggers
+                    state.warning_triggered = true;
+                    state.repeat_timer = 0.0;
+                    state.warning_start_time = elapsed_time;
+                    int cur_volume = config.start_volume;
+                    // Reset lookout flags after warning so user can start a fresh cycle
+                    state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
+                    std::cout << "[DEBUG] Alarm " << i << ": Lookout flags reset after warning triggered." << std::endl;
+                    // Optionally reset timer to avoid immediate repeat (more forgiving UX)
+                    state.noLookTime = 0.0;
+                    std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout!\n"
+                              << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
+                              << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
+                              << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
+                              << "    Volume: " << cur_volume << std::endl;
+                    std::cout << "[DEBUG] Alarm " << i << ": Warning triggered!" << std::endl;
+                    play_alarm_sound(config.audio_file, cur_volume);
+                } else if (state.warning_triggered) {
+                    state.repeat_timer += POLL_INTERVAL * 1000.0;
+                    double ramp_elapsed = elapsed_time - state.warning_start_time;
+                    int cur_volume = config.start_volume;
+                    if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
+                        double ramp = (std::min)(1.0, ramp_elapsed / config.volume_ramp_time_ms);
+                        cur_volume = (int)(config.start_volume + ramp * (config.end_volume - config.start_volume));
                     }
-                    repeat_timer = 0.0;
+                    if (state.repeat_timer >= config.repeat_interval_ms) {
+                        if (elapsed_time < state.alarm_silence_until) {
+                            // Alarm is silenced
+                            std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced, skipping repeat warning." << std::endl;
+                        } else {
+                            std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! (repeat)\n"
+                                      << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
+                                      << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
+                                      << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
+                                      << "    Volume: " << cur_volume << std::endl;
+                            std::cout << "[DEBUG] Alarm " << i << ": Repeat warning triggered!" << std::endl;
+                            play_alarm_sound(config.audio_file, cur_volume);
+                        }
+                        state.repeat_timer = 0.0;
+                    }
                 }
             }
         }
