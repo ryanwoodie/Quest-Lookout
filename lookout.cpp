@@ -19,7 +19,8 @@
 #include <SFML/Audio.hpp>
 #include <windows.h>
 #include <shellapi.h> // For Shell_NotifyIcon
-#include <thread>       // For std::thread 
+#include <thread>       // For std::thread
+#include <cstdio>       // For _wfreopen_s, FILE 
 #include <SFML/System/Time.hpp>
 #include <SFML/System/FileInputStream.hpp>
 
@@ -113,13 +114,58 @@ sf::Music* get_or_create_sound_player(const std::string& audio_file) {
 #define WM_APP_TRAYMSG (WM_APP + 1)
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT_CONTEXT_MENU_ITEM 1002
+#define ID_TRAY_TOGGLE_CONSOLE_ITEM 1003
 
 const char* const WINDOW_CLASS_NAME = "QuestLookoutWindowClass";
 HWND g_hwnd;
 NOTIFYICONDATA nidApp;
+bool g_is_console_visible = false;
 
 // Forward declaration for our core application logic
 int app_core_logic(); // Signature changed for threading
+
+// Console Management Functions
+void ShowConsoleWindow()
+{
+    if (!g_is_console_visible)
+    {
+        if (AllocConsole())
+        {
+            FILE* fp_stdout, *fp_stderr, *fp_stdin;
+            if (_wfreopen_s(&fp_stdout, L"CONOUT$", L"w", stdout) != 0 ||
+                _wfreopen_s(&fp_stderr, L"CONOUT$", L"w", stderr) != 0 ||
+                _wfreopen_s(&fp_stdin, L"CONIN$", L"r", stdin) != 0)
+            {
+                // Handle error - perhaps show a MessageBox
+                FreeConsole(); // Clean up if redirection failed
+                return;
+            }
+            // Clear the C++ stream states so they pick up the new C file descriptors
+            std::cout.clear();
+            std::cerr.clear();
+            SetConsoleTitleA("Quest Lookout Status"); // Use A version for ANSI string
+            g_is_console_visible = true;
+            std::cout << "[INFO] Status window opened." << std::endl; // Initial message to the new console
+        }
+    }
+}
+
+void HideConsoleWindow()
+{
+    if (g_is_console_visible)
+    {
+        FILE* fp_nul_stdout, *fp_nul_stderr, *fp_nul_stdin;
+        // Redirect streams to NUL before freeing console to prevent issues
+        _wfreopen_s(&fp_nul_stdout, L"NUL", L"w", stdout);
+        _wfreopen_s(&fp_nul_stderr, L"NUL", L"w", stderr);
+        _wfreopen_s(&fp_nul_stdin, L"NUL", L"r", stdin);
+
+        if (FreeConsole())
+        {
+            g_is_console_visible = false;
+        }
+    }
+}
 
 // Window Procedure
 LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -134,6 +180,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     POINT curPoint;
                     GetCursorPos(&curPoint);
                     HMENU hPopupMenu = CreatePopupMenu();
+                    InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_BYPOSITION | MF_STRING, 
+                               ID_TRAY_TOGGLE_CONSOLE_ITEM, // Argument 4: UINT_PTR uIDNewItem (Menu Item ID)
+                               g_is_console_visible ? "Hide Status Window" : "Show Status Window"); // Argument 5: LPCSTR lpNewItem (Menu Item String)
+                    InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_SEPARATOR, 0, NULL); // Separator
                     InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT_CONTEXT_MENU_ITEM, "Exit");
                     
                     // --- Fix for persistent context menu ---
@@ -155,13 +205,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             break;
 
         case WM_COMMAND: // Sent when a menu item is clicked
-            if (LOWORD(wParam) == ID_TRAY_EXIT_CONTEXT_MENU_ITEM)
+            switch (LOWORD(wParam))
             {
-                DestroyWindow(hwnd); // This will trigger WM_DESTROY
+                case ID_TRAY_EXIT_CONTEXT_MENU_ITEM:
+                    DestroyWindow(hwnd); // This will trigger WM_DESTROY
+                    break;
+                case ID_TRAY_TOGGLE_CONSOLE_ITEM:
+                    if (g_is_console_visible)
+                    {
+                        HideConsoleWindow();
+                    }
+                    else
+                    {
+                        ShowConsoleWindow();
+                    }
+                    break;
             }
             break;
 
         case WM_DESTROY:
+            if (g_is_console_visible) HideConsoleWindow(); // Ensure console is closed if app exits
             Shell_NotifyIcon(NIM_DELETE, &nidApp); // Remove icon from tray
             PostQuitMessage(0); // Signals the main message loop to exit
             break;
