@@ -89,18 +89,20 @@ void save_config(const std::string& filename, const LookoutAlarmConfig& cfg) {
 #include <vector>
 
 void play_alarm_sound(const std::string& audio_file, int volume) {
-    static sf::SoundBuffer buffer;
-    static std::string last_file;
+    static std::unordered_map<std::string, sf::SoundBuffer> buffer_map;
     static std::vector<std::unique_ptr<sf::Sound>> active_sounds;
 
     std::string file_to_play = audio_file.empty() ? "beep.wav" : audio_file;
-    if (last_file != file_to_play) {
-        if (!buffer.loadFromFile(file_to_play)) {
+    auto it = buffer_map.find(file_to_play);
+    if (it == buffer_map.end()) {
+        sf::SoundBuffer buf;
+        if (!buf.loadFromFile(file_to_play)) {
             std::cerr << "[ERROR] Could not load sound file: " << file_to_play << std::endl;
             return;
         }
-        last_file = file_to_play;
+        it = buffer_map.emplace(file_to_play, std::move(buf)).first;
     }
+    sf::SoundBuffer& buffer = it->second;
 
     // Clean up finished sounds
     active_sounds.erase(
@@ -156,10 +158,40 @@ int main() {
         std::cout << "[INFO] Warning repeat interval: " << alarm.repeat_interval_ms << " ms\n";
     }
 
+    // Find the alarm with the widest horizontal angle
+    size_t widest_alarm_idx = 0;
+    double widest_angle = alarms[0].min_horizontal_angle;
+    for (size_t i = 1; i < alarms.size(); ++i) {
+        if (alarms[i].min_horizontal_angle > widest_angle) {
+            widest_angle = alarms[i].min_horizontal_angle;
+            widest_alarm_idx = i;
+        }
+    }
+
     // Rolling window for median center (shared for all alarms)
     const size_t WINDOW_SIZE = 600; // 2 minutes if POLL_INTERVAL=0.1s
     std::deque<double> yaw_window, pitch_window;
     double elapsed_time = 0.0;
+
+    // --- Parse center reset parameters from settings.json ---
+    double center_window_degrees = 20.0;
+    double center_hold_time_seconds = 3.0;
+    double center_hold_timer = 0.0;
+    bool center_reset_active = false;
+    {
+        std::ifstream f("settings.json");
+        if (f) {
+            nlohmann::json j;
+            f >> j;
+            if (j.contains("center_reset")) {
+                if (j["center_reset"].contains("window_degrees"))
+                    center_window_degrees = j["center_reset"]["window_degrees"].get<double>();
+                if (j["center_reset"].contains("hold_time_seconds"))
+                    center_hold_time_seconds = j["center_reset"]["hold_time_seconds"].get<double>();
+            }
+        }
+        std::cout << "[INFO] Center reset window: " << center_window_degrees << "°, hold time: " << center_hold_time_seconds << "s" << std::endl;
+    }
 
     // Per-alarm state structs
     struct AlarmState {
@@ -209,9 +241,33 @@ int main() {
         double dpitch = clamp_angle(pitch_deg - center_pitch);
 
         // --- Lookout scan logic: must look past both sides (horiz & vert) before timer resets ---
+        // --- Center Reset Logic ---
+        // Check if headset is within center window for all axes
+        if (std::abs(dyaw) < center_window_degrees && std::abs(dpitch) < center_window_degrees) {
+            center_hold_timer += POLL_INTERVAL;
+            if (!center_reset_active && center_hold_timer >= center_hold_time_seconds) {
+                // Reset lookout flags for all alarms
+                for (size_t i = 0; i < alarms.size(); ++i) {
+                    alarm_states[i].looked_left = false;
+                    alarm_states[i].looked_right = false;
+                    alarm_states[i].looked_up = false;
+                    alarm_states[i].looked_down = false;
+                    alarm_states[i].left_look_time = -1.0;
+                    alarm_states[i].right_look_time = -1.0;
+                }
+                center_reset_active = true;
+                std::cout << "[DEBUG] Center reset: All lookout flags reset after holding within " << center_window_degrees << "° for " << center_hold_time_seconds << " seconds." << std::endl;
+            }
+        } else {
+            center_hold_timer = 0.0;
+            center_reset_active = false;
+        }
+
         for (size_t i = 0; i < alarms.size(); ++i) {
             AlarmState& state = alarm_states[i];
             const LookoutAlarmConfig& config = alarms[i];
+            double min_horiz = config.min_horizontal_angle / 2.0;
+            double min_vert = config.min_vertical_angle / 2.0;
 
             // Always update rolling window for center with current head orientation
             yaw_window.push_back(yaw_deg);
@@ -228,10 +284,16 @@ int main() {
             if (dyaw < -config.min_horizontal_angle && !state.looked_left) {
                 state.looked_left = true;
                 state.left_look_time = elapsed_time;
+                // Silence alarm for silence_after_look_ms from NOW
+                state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
+                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L set (0->1)." << std::endl;
             }
             if (dyaw >  config.min_horizontal_angle && !state.looked_right) {
                 state.looked_right = true;
                 state.right_look_time = elapsed_time;
+                // Silence alarm for silence_after_look_ms from NOW
+                state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
+                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after R set (0->1)." << std::endl;
             }
             if (dpitch < -config.min_vertical_angle) state.looked_down = true;
             if (dpitch >  config.min_vertical_angle) state.looked_up = true;
@@ -256,6 +318,15 @@ int main() {
             // Always increment timer
             state.noLookTime += POLL_INTERVAL * 1000.0; // ms
 
+            // --- ALARM SILENCE BASED ON MOST RECENT L/R EVENT ---
+            // Do not trigger alarm if we're still in the silence window after last L/R
+            if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
+                if (elapsed_time < state.alarm_silence_until) {
+                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning." << std::endl;
+                    continue;
+                }
+            }
+
             // If all lookouts completed, check min_lookout_time_ms between L/R
             if (state.looked_left && state.looked_right && state.looked_up && state.looked_down) {
                 double lr_time_diff = std::abs(state.left_look_time - state.right_look_time);
@@ -267,6 +338,20 @@ int main() {
                     state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
                     state.left_look_time = state.right_look_time = -1.0;
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout flags reset after successful lookout. L/R time diff: " << lr_time_diff << " ms" << std::endl;
+                    // --- WIDER ANGLE ALARM RESETS NARROWER ALARMS ---
+                    if (i == widest_alarm_idx) {
+                        for (size_t j = 0; j < alarms.size(); ++j) {
+                            if (j != i && alarms[j].min_horizontal_angle < config.min_horizontal_angle) {
+                                alarm_states[j].noLookTime = 0.0;
+                                alarm_states[j].warning_triggered = false;
+                                alarm_states[j].repeat_timer = 0.0;
+                                alarm_states[j].warning_start_time = 0.0;
+                                alarm_states[j].looked_left = alarm_states[j].looked_right = alarm_states[j].looked_up = alarm_states[j].looked_down = false;
+                                alarm_states[j].left_look_time = alarm_states[j].right_look_time = -1.0;
+                                std::cout << "[DEBUG] Alarm " << i << ": Resetting narrower alarm " << j << " due to wider angle lookout." << std::endl;
+                            }
+                        }
+                    }
                 } else {
                     // Only print once per failed attempt, then reset flags/timestamps
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout not counted: L/R time diff too short (" << lr_time_diff << " ms < " << config.min_lookout_time_ms << " ms)" << std::endl;
@@ -282,6 +367,11 @@ int main() {
                 }
 
                 if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
+                    // Only trigger alarm if not silenced
+                    if (elapsed_time < state.alarm_silence_until) {
+                        std::cout << "[DEBUG] Alarm " << i << ": Alarm pre-silenced, skipping first warning." << std::endl;
+                        continue;
+                    }
                     state.left_look_time = state.right_look_time = -1.0; // reset if warning triggers
                     state.warning_triggered = true;
                     state.repeat_timer = 0.0;
