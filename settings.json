@@ -3,7 +3,7 @@
     {
       "min_horizontal_angle": 45.0,
       "min_vertical_angle": 10.0,
-      "max_time_ms": 20000,
+      "max_time_ms": 10000,
       "audio_file": "lookout.ogg",
       "start_volume": 50,
       "end_volume": 100,
@@ -15,9 +15,9 @@
     {
       "min_horizontal_angle": 120.0,
       "min_vertical_angle": 20.0,
-      "max_time_ms": 60000,
+      "max_time_ms": 20000,
       "audio_file": "notalentassclown.ogg",
-      "start_volume": 10,
+      "start_volume": 5,
       "end_volume": 100,
       "volume_ramp_time_ms": 60000,
       "repeat_interval_ms": 30000,
