@@ -7,5 +7,6 @@
     "end_volume": 100,
     "volume_ramp_time_ms": 30000,
     "repeat_interval_ms": 2000,
+  "silence_after_look_ms": 5000,
     "min_lookout_time_ms": 2000
 }

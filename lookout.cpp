@@ -30,11 +30,13 @@ struct LookoutAlarmConfig {
     int volume_ramp_time_ms = 1000;     // ms
     int repeat_interval_ms = 2000;      // ms
     int min_lookout_time_ms = 2000;     // Minimum time to hold lookout (ms)
+    int silence_after_look_ms = 2000;   // ms to silence alarm after L or R cleared
 
     // Serialize/deserialize with nlohmann::json
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(LookoutAlarmConfig,
         min_horizontal_angle, min_vertical_angle, max_time_ms, audio_file,
-        start_volume, end_volume, volume_ramp_time_ms, repeat_interval_ms, min_lookout_time_ms)
+        start_volume, end_volume, volume_ramp_time_ms, repeat_interval_ms, min_lookout_time_ms,
+        silence_after_look_ms)
 };
 
 // Helper: Clamp angle to [-180, 180] degrees
@@ -194,6 +196,8 @@ int main() {
 
         // --- Lookout scan logic: must look past both sides (horiz & vert) before timer resets ---
         static bool looked_left = false, looked_right = false, looked_up = false, looked_down = false;
+        static bool prev_looked_left = false, prev_looked_right = false;
+        static double alarm_silence_until = 0.0; // ms since start
 
         // Always update rolling window for center with current head orientation
         yaw_window.push_back(yaw_deg);
@@ -201,11 +205,19 @@ int main() {
         if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
         if (pitch_window.size() > WINDOW_SIZE) pitch_window.pop_front();
 
+        // Save previous L/R before updating
+        bool prev_looked_left_tmp = looked_left;
+        bool prev_looked_right_tmp = looked_right;
+
         // Track lookouts
         if (dyaw < -min_horiz) looked_left = true;
         if (dyaw >  min_horiz) looked_right = true;
         if (dpitch < -min_vert) looked_down = true;
         if (dpitch >  min_vert) looked_up = true;
+
+        // Update previous L/R for next iteration
+        prev_looked_left = prev_looked_left_tmp;
+        prev_looked_right = prev_looked_right_tmp;
 
         // Throttled debug output (print once per second)
         static double last_debug_time = 0.0;
@@ -232,6 +244,12 @@ int main() {
             looked_left = looked_right = looked_up = looked_down = false;
             std::cout << "[DEBUG] Lookout flags reset after successful lookout." << std::endl;
         } else {
+            // Check for L/R flag set after alarm is repeating (0 -> 1)
+            if (warning_triggered && ((!prev_looked_left && looked_left) || (!prev_looked_right && looked_right))) {
+                alarm_silence_until = elapsed_time + config.silence_after_look_ms;
+                std::cout << "[DEBUG] Alarm silenced for " << config.silence_after_look_ms << " ms after L or R set (0->1)." << std::endl;
+            }
+
             if (!warning_triggered && noLookTime >= config.max_time_ms) {
                 warning_triggered = true;
                 repeat_timer = 0.0;
@@ -258,13 +276,18 @@ int main() {
                     cur_volume = (int)(config.start_volume + ramp * (config.end_volume - config.start_volume));
                 }
                 if (repeat_timer >= config.repeat_interval_ms) {
-                    std::cout << "[WARNING] Please perform a visual lookout! (repeat)\n"
-                              << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
-                              << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
-                              << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
-                              << "    Volume: " << cur_volume << std::endl;
-                    std::cout << "[DEBUG] Repeat warning triggered!" << std::endl;
-                    play_alarm_sound(config.audio_file, cur_volume);
+                    if (elapsed_time < alarm_silence_until) {
+                        // Alarm is silenced
+                        std::cout << "[DEBUG] Alarm silenced, skipping repeat warning." << std::endl;
+                    } else {
+                        std::cout << "[WARNING] Please perform a visual lookout! (repeat)\n"
+                                  << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
+                                  << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
+                                  << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
+                                  << "    Volume: " << cur_volume << std::endl;
+                        std::cout << "[DEBUG] Repeat warning triggered!" << std::endl;
+                        play_alarm_sound(config.audio_file, cur_volume);
+                    }
                     repeat_timer = 0.0;
                 }
             }
