@@ -189,7 +189,6 @@ int main() {
         if (!(ts.StatusFlags & ovrStatus_OrientationTracked)) { 
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
             elapsed_time_ms += POLL_INTERVAL * 1000.0; 
-            // Basic tracking warning, can be expanded
             static double last_no_track_warn = 0;
             if(elapsed_time_ms - last_no_track_warn > 5000) {
                 std::cerr << "[WARNING] No HMD tracking!" << std::endl;
@@ -243,16 +242,15 @@ int main() {
             const LookoutAlarmConfig& config = alarms[i];
             if (config.min_horizontal_angle <= 0) continue; 
 
-            bool prev_looked_left_ever = state.looked_left_ever; // For detecting new L/R this tick
-            bool prev_looked_right_ever = state.looked_right_ever;
-
-            bool currently_looking_left = dyaw < -(config.min_horizontal_angle / 2.0);
-            bool currently_looking_right = dyaw > (config.min_horizontal_angle / 2.0);
+            // This is the L/R logic from the "working" code you provided.
+            // dyaw > thresh is Left, dyaw < -thresh is Right.
+            bool currently_looking_left = dyaw > (config.min_horizontal_angle / 2.0);
+            bool currently_looking_right = dyaw < -(config.min_horizontal_angle / 2.0);
             bool currently_looking_up = dpitch > (config.min_vertical_angle / 2.0);
             bool currently_looking_down = dpitch < -(config.min_vertical_angle / 2.0);
 
             bool new_lr_look_this_tick = false;
-            if (currently_looking_left && !state.looked_left_ever) { // Only update if it's a new "ever" detection
+            if (currently_looking_left && !state.looked_left_ever) { 
                 state.looked_left_ever = true; state.left_ever_time_ms = elapsed_time_ms; new_lr_look_this_tick = true;
                 std::cout << "[DEBUG] Alarm " << i << ": L registered." << std::endl;
             }
@@ -260,7 +258,6 @@ int main() {
                 state.looked_right_ever = true; state.right_ever_time_ms = elapsed_time_ms; new_lr_look_this_tick = true;
                 std::cout << "[DEBUG] Alarm " << i << ": R registered." << std::endl;
             }
-            // U/D flags become true if ever looked in that direction since last reset
             if (currently_looking_up) state.looked_up_ever = true;
             if (currently_looking_down) state.looked_down_ever = true;
             
@@ -268,6 +265,8 @@ int main() {
             if (elapsed_time_ms - last_periodic_state_dump_time_ms >= 1000.0) { 
                  std::cout << std::fixed << std::setprecision(1) 
                            << "[STATE] Alarm " << i 
+                           << ": dyaw: " << dyaw << ", dpitch: " << dpitch                 // DEBUG INFO ADDED
+                           << " | C(y,p): (" << center_yaw << "," << center_pitch << ")"   // DEBUG INFO ADDED
                            << " | L:" << state.looked_left_ever << "(" << state.left_ever_time_ms/1000.0 << "s)" 
                            << " R:" << state.looked_right_ever << "(" << state.right_ever_time_ms/1000.0 << "s)"
                            << " U:" << state.looked_up_ever << " D:" << state.looked_down_ever
@@ -292,7 +291,7 @@ int main() {
                     state.looked_right_ever = false; state.right_ever_time_ms = -1.0;
                     state.looked_up_ever = false; state.looked_down_ever = false;
                     state.silence_message_printed_this_period = false; state.alarm_silence_until_ms = 0; 
-                    if (state.sound_player) { state.sound_player->stop(); /* sound_player will be nullptr or new next time */ }
+                    if (state.sound_player) { state.sound_player->stop(); }
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout successful. L/R diff: " << lr_time_diff_ms << " ms. Reset." << std::endl;
                     if (widest_alarm_valid && i == widest_alarm_idx) { 
                         for (size_t j = 0; j < alarms.size(); ++j) {
@@ -303,7 +302,7 @@ int main() {
                                 alarm_states[j].looked_right_ever = false; alarm_states[j].right_ever_time_ms = -1.0;
                                 alarm_states[j].looked_up_ever = false; alarm_states[j].looked_down_ever = false;
                                 alarm_states[j].silence_message_printed_this_period = false; alarm_states[j].alarm_silence_until_ms = 0;
-                                if (alarm_states[j].sound_player) { alarm_states[j].sound_player->stop(); /* and null it? handled by get_or_create */}
+                                if (alarm_states[j].sound_player) { alarm_states[j].sound_player->stop(); }
                                 std::cout << "[DEBUG] Alarm " << i << " (widest): Resetting narrower alarm " << j << "." << std::endl;
                             }
                         }
@@ -344,38 +343,42 @@ int main() {
                     state.looked_up_ever = false; state.looked_down_ever = false;
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout flags reset as warning triggers." << std::endl;
                     
-                    // Stop any previous sound for this alarm before starting new one
                     if(state.sound_player && state.sound_player->getStatus() != sf::SoundSource::Status::Stopped) state.sound_player->stop();
+                    if (state.sound_player) { delete state.sound_player; state.sound_player = nullptr; } // Delete old before creating new
                     state.sound_player = get_or_create_sound_player(config.audio_file);
 
                     if (state.sound_player) {
                         int cur_volume = config.start_volume;
-                        state.sound_player->setLooping(true); // CORRECTED API
                         state.sound_player->setVolume(static_cast<float>(cur_volume));
                         state.sound_player->play();
                         std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! Vol: " << cur_volume << std::endl;
                     }
                 }
             } 
-            else if (state.warning_triggered) { 
-                if (!state.sound_player || state.sound_player->getStatus() == sf::SoundSource::Status::Stopped) {
-                     if(state.sound_player && state.sound_player->getStatus() != sf::SoundSource::Status::Stopped) state.sound_player->stop(); // Stop if not null but somehow stopped by other means
-                    state.sound_player = get_or_create_sound_player(config.audio_file);
-                    if (state.sound_player && state.sound_player->getStatus() != sf::SoundSource::Status::Playing) { // CORRECTED API
-                         state.sound_player->setLooping(true); // CORRECTED API
-                         state.sound_player->play(); 
-                         std::cout << "[DEBUG] Alarm " << i << ": Sound player (re)started for active warning." << std::endl;
+            else if (state.warning_triggered) {
+                double ramp_elapsed_ms = elapsed_time_ms - state.warning_start_time_ms;
+                int target_volume = config.start_volume;
+                if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
+                    double ramp_progress = std::min(1.0, ramp_elapsed_ms / static_cast<double>(config.volume_ramp_time_ms));
+                    target_volume = static_cast<int>(config.start_volume + ramp_progress * (config.end_volume - config.start_volume));
+                }
+
+                if (state.repeat_timer_ms >= config.repeat_interval_ms &&
+                    (!state.sound_player || state.sound_player->getStatus() == sf::SoundSource::Status::Stopped)) {
+                    if (state.sound_player) {
+                        delete state.sound_player;
+                        state.sound_player = nullptr;
                     }
+                    state.sound_player = get_or_create_sound_player(config.audio_file);
+                    if (state.sound_player) {
+                        state.sound_player->setVolume(static_cast<float>(target_volume));
+                        state.sound_player->play();
+                        std::cout << "[DEBUG] Alarm " << i << ": Sound player (re)started for active warning (repeat)." << std::endl;
+                    }
+                    state.repeat_timer_ms = 0.0;
                 }
 
                 if (state.sound_player) {
-                    double ramp_elapsed_ms = elapsed_time_ms - state.warning_start_time_ms;
-                    int target_volume = config.start_volume;
-                    if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
-                        double ramp_progress = std::min(1.0, ramp_elapsed_ms / static_cast<double>(config.volume_ramp_time_ms));
-                        target_volume = static_cast<int>(config.start_volume + ramp_progress * (config.end_volume - config.start_volume));
-                    }
-
                     if (elapsed_time_ms < state.alarm_silence_until_ms) { 
                         state.sound_player->setVolume(0);
                         if (!state.silence_message_printed_this_period) {
@@ -392,8 +395,8 @@ int main() {
                         if (state.repeat_timer_ms >= config.repeat_interval_ms) {
                             std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! (repeat reminder) Vol: " << target_volume << std::endl;
                             state.repeat_timer_ms = 0.0; 
-                            if (state.sound_player->getStatus() != sf::SoundSource::Status::Playing) { // CORRECTED API
-                                state.sound_player->play(); // Ensure it's playing if it was stopped for any reason and should be looping
+                            if (state.sound_player->getStatus() != sf::SoundSource::Status::Playing) {
+                                state.sound_player->play(); 
                             }
                         }
                     }
@@ -410,7 +413,15 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
     } 
 
-    active_sound_players.clear(); 
+    // Cleanup sf::Music objects
+    for(auto& state : alarm_states) {
+        if(state.sound_player) {
+            state.sound_player->stop();
+            delete state.sound_player;
+            state.sound_player = nullptr;
+        }
+    }
+
     ovr_Destroy(session);
     ovr_Shutdown();
     return 0;
