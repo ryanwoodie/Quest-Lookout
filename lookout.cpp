@@ -15,7 +15,7 @@
 
 #define LOOK_THRESHOLD (20.0 * M_PI / 180.0) // 20 degrees in radians
 #define WARNING_TIME 2.0 // seconds
-#define POLL_INTERVAL 0.1 // seconds
+#define POLL_INTERVAL 0.05 // seconds (Increased from 0.1 for 20Hz)
 #include <fstream>
 #include "json.hpp" // For JSON config (requires nlohmann/json single header)
 #include <SFML/Audio.hpp> // For audio playback with volume control
@@ -178,6 +178,7 @@ int main() {
     double center_hold_time_seconds = 3.0;
     double center_hold_timer = 0.0;
     bool center_reset_active = false;
+    static double last_debug_time = 0.0; // For throttling debug output
     {
         std::ifstream f("settings.json");
         if (f) {
@@ -202,6 +203,7 @@ int main() {
         double alarm_silence_until = 0.0;
         double left_look_time = -1.0, right_look_time = -1.0;
         sf::Sound* current_sound_instance = nullptr; 
+        bool silence_message_printed = false; // Track if we've printed the silence message
     };
     std::vector<AlarmState> alarm_states(alarms.size());
 
@@ -286,13 +288,19 @@ int main() {
                 state.looked_left = true;
                 state.left_look_time = elapsed_time;
                 state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L set (0->1)." << std::endl;
+                if (elapsed_time - last_debug_time >= 1000.0) {
+                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L set (0->1)." << std::endl;
+                    last_debug_time = elapsed_time;
+                }
             }
             if (dyaw >  horiz_thresh && !state.looked_right) { 
                 state.looked_right = true;
                 state.right_look_time = elapsed_time;
                 state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after R set (0->1)." << std::endl;
+                if (elapsed_time - last_debug_time >= 1000.0) {
+                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after R set (0->1)." << std::endl;
+                    last_debug_time = elapsed_time;
+                }
             }
             if (dpitch < -vert_thresh) state.looked_down = true; 
             if (dpitch >  vert_thresh) state.looked_up = true;  
@@ -304,13 +312,7 @@ int main() {
             static double last_debug_time = 0.0;
             // Throttled debug output
             if (elapsed_time - last_debug_time >= 1000.0) { // Print roughly every second
-                 std::cout << "[DEBUG] Alarm " << i << ": dyaw: " << dyaw << ", dpitch: " << dpitch
-                          << " | C(y,p): (" << center_yaw << "," << center_pitch 
-                          << ") | L:" << state.looked_left << " R:" << state.looked_right
-                          << " U:" << state.looked_up << " D:" << state.looked_down
-                          << " | noLook: " << state.noLookTime
-                          << " | warn: " << state.warning_triggered
-                          << " | silenceU: " << state.alarm_silence_until << std::endl;
+                 std::cout << "[DEBUG] Alarm " << i << ": dyaw: " << dyaw << ", dpitch: " << dpitch << " | C(y,p): (" << center_yaw << "," << center_pitch << ") | L:" << state.looked_right << " R:" << state.looked_left << " U:" << state.looked_up << " D:" << state.looked_down << " | noLook: " << state.noLookTime << " | warn: " << state.warning_triggered << " | silenceU: " << state.alarm_silence_until << std::endl;
                 if (i == alarms.size() - 1) last_debug_time = elapsed_time; // Reset for the next second after last alarm's debug
             }
 
@@ -335,6 +337,7 @@ int main() {
                     state.warning_start_time = 0.0;
                     state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
                     state.left_look_time = state.right_look_time = -1.0;
+                    state.silence_message_printed = false; // Reset the flag when alarm is reset
                     if (state.current_sound_instance && state.current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
                         state.current_sound_instance->stop();
                     }
@@ -349,7 +352,8 @@ int main() {
                                 alarm_states[j].warning_start_time = 0.0;
                                 alarm_states[j].looked_left = alarm_states[j].looked_right = alarm_states[j].looked_up = alarm_states[j].looked_down = false;
                                 alarm_states[j].left_look_time = alarm_states[j].right_look_time = -1.0;
-                                 if (alarm_states[j].current_sound_instance && alarm_states[j].current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
+                                alarm_states[j].silence_message_printed = false; // Reset the flag when alarm is reset
+                                if (alarm_states[j].current_sound_instance && alarm_states[j].current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
                                     alarm_states[j].current_sound_instance->stop();
                                 }
                                 alarm_states[j].current_sound_instance = nullptr;
@@ -365,14 +369,21 @@ int main() {
             } else {
                 if (state.warning_triggered && ((!state.prev_looked_left && state.looked_left) || (!state.prev_looked_right && state.looked_right))) {
                     state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L or R set (0->1) during warning." << std::endl;
+                    if (!state.silence_message_printed) {
+                        std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L or R set (0->1) during warning." << std::endl;
+                        state.silence_message_printed = true;
+                    }
                 }
 
                 if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
                     if (elapsed_time < state.alarm_silence_until) {
-                        std::cout << "[DEBUG] Alarm " << i << ": Alarm pre-silenced, skipping first warning." << std::endl;
+                        if (!state.silence_message_printed) {
+                            std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning." << std::endl;
+                            state.silence_message_printed = true; // Mark that we've printed for this silence period
+                        }
                         // state.noLookTime = 0; // Optional: if silence should reset the timer completely
                     } else {
+                        state.silence_message_printed = false; // Reset here, as the silence period has ended
                         state.left_look_time = state.right_look_time = -1.0; 
                         state.warning_triggered = true;
                         state.repeat_timer = 0.0;

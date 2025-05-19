@@ -14,7 +14,7 @@
     },
     {
       "min_horizontal_angle": 120.0,
-      "min_vertical_angle": 20.0,
+      "min_vertical_angle": 15.0,
       "max_time_ms": 20000,
       "audio_file": "notalentassclown.ogg",
       "start_volume": 5,
@@ -27,7 +27,7 @@
   ]
 ,
   "center_reset": {
-    "window_degrees": 20,
-    "hold_time_seconds": 3
+    "window_degrees": 10,
+    "hold_time_seconds": 4
   }
 }
