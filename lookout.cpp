@@ -135,14 +135,20 @@ int main() {
 
     // Load config
     LookoutAlarmConfig config = load_config("settings.json");
+    // Robust guard for repeat interval
+    if (config.repeat_interval_ms < 100) {
+        std::cerr << "[WARNING] repeat_interval_ms invalid or missing, defaulting to 2000 ms\n";
+        config.repeat_interval_ms = 2000;
+    }
     double min_horiz = config.min_horizontal_angle / 2.0; // ±half
     double min_vert = config.min_vertical_angle / 2.0;     // ±half
     double noLookTime = 0.0;
-    bool primed = false;
     std::cout << "Oculus Lookout Utility started. Press Ctrl+C to quit." << std::endl;
+    std::cout << "[INFO] Warning repeat interval: " << config.repeat_interval_ms << " ms\n";
 
     // Rolling window for median center
-    const size_t WINDOW_SIZE = 1000; // ~10 seconds if POLL_INTERVAL=0.1s
+    const size_t WINDOW_SIZE = 1200; // 2 minutes if POLL_INTERVAL=0.1s
+
     std::deque<double> yaw_window, pitch_window;
     bool warning_triggered = false;
     double repeat_timer = 0.0;
@@ -158,124 +164,116 @@ int main() {
         double yaw_deg, pitch_deg;
         quat_to_yaw_pitch(q, yaw_deg, pitch_deg);
 
-        // Compute current center
+
+        // Compute current center using IQR (interquartile range) median
         double center_yaw = 0.0, center_pitch = 0.0;
         if (!yaw_window.empty()) {
+            // Yaw: sort, get Q1, Q3, filter to [Q1, Q3], get median
             std::vector<double> sorted_yaw(yaw_window.begin(), yaw_window.end());
+            std::sort(sorted_yaw.begin(), sorted_yaw.end());
+            size_t n = sorted_yaw.size();
+            size_t q1_idx = n / 4;
+            size_t q3_idx = (3 * n) / 4;
+            std::vector<double> iqr_yaw(sorted_yaw.begin() + q1_idx, sorted_yaw.begin() + q3_idx + 1);
+            std::nth_element(iqr_yaw.begin(), iqr_yaw.begin() + iqr_yaw.size()/2, iqr_yaw.end());
+            center_yaw = iqr_yaw[iqr_yaw.size()/2];
+
+            // Pitch: same as yaw
             std::vector<double> sorted_pitch(pitch_window.begin(), pitch_window.end());
-            std::nth_element(sorted_yaw.begin(), sorted_yaw.begin() + sorted_yaw.size()/2, sorted_yaw.end());
-            std::nth_element(sorted_pitch.begin(), sorted_pitch.begin() + sorted_pitch.size()/2, sorted_pitch.end());
-            center_yaw = sorted_yaw[sorted_yaw.size()/2];
-            center_pitch = sorted_pitch[sorted_pitch.size()/2];
+            std::sort(sorted_pitch.begin(), sorted_pitch.end());
+            n = sorted_pitch.size();
+            q1_idx = n / 4;
+            q3_idx = (3 * n) / 4;
+            std::vector<double> iqr_pitch(sorted_pitch.begin() + q1_idx, sorted_pitch.begin() + q3_idx + 1);
+            std::nth_element(iqr_pitch.begin(), iqr_pitch.begin() + iqr_pitch.size()/2, iqr_pitch.end());
+            center_pitch = iqr_pitch[iqr_pitch.size()/2];
         }
 
         double dyaw = clamp_angle(yaw_deg - center_yaw);
         double dpitch = clamp_angle(pitch_deg - center_pitch);
 
-        // Only update rolling window with 'normal' (non-lookout) samples
-        if (std::abs(dyaw) < min_horiz && std::abs(dpitch) < min_vert) {
-            yaw_window.push_back(yaw_deg);
-            pitch_window.push_back(pitch_deg);
-            if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
-            if (pitch_window.size() > WINDOW_SIZE) pitch_window.pop_front();
-            // User is centered: prime the system and reset noLookTime
-            primed = true;
+        // --- Lookout scan logic: must look past both sides (horiz & vert) before timer resets ---
+        static bool looked_left = false, looked_right = false, looked_up = false, looked_down = false;
+
+        // Always update rolling window for center with current head orientation
+        yaw_window.push_back(yaw_deg);
+        pitch_window.push_back(pitch_deg);
+        if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
+        if (pitch_window.size() > WINDOW_SIZE) pitch_window.pop_front();
+
+        // Track lookouts
+        if (dyaw < -min_horiz) looked_left = true;
+        if (dyaw >  min_horiz) looked_right = true;
+        if (dpitch < -min_vert) looked_down = true;
+        if (dpitch >  min_vert) looked_up = true;
+
+        // Throttled debug output (print once per second)
+        static double last_debug_time = 0.0;
+        if (elapsed_time - last_debug_time >= 1000.0) {
+            std::cout << "[DEBUG] dyaw: " << dyaw << ", dpitch: " << dpitch
+                      << " | center_yaw: " << center_yaw << ", center_pitch: " << center_pitch
+                      << " | noLookTime: " << noLookTime
+                      << " | L:" << looked_left << " R:" << looked_right
+                      << " U:" << looked_up << " D:" << looked_down
+                      << " | warning_triggered: " << warning_triggered
+                      << " | repeat_timer: " << repeat_timer << std::endl;
+            last_debug_time = elapsed_time;
+        }
+
+        // Always increment timer
+        noLookTime += POLL_INTERVAL * 1000.0; // ms
+
+        // If all lookouts completed, reset timer and flags
+        if (looked_left && looked_right && looked_up && looked_down) {
             noLookTime = 0.0;
-        }
-
-        // Yaw-only side-to-side lookout logic
-        enum class YawLookoutState { None, Left, Right };
-        static YawLookoutState lookout_state = YawLookoutState::None;
-        static double lookout_timer = 0.0;
-        static double lookout_start_time = 0.0;
-
-        // Detect crossing left/right thresholds
-        if (lookout_state == YawLookoutState::None) {
-            if (dyaw < -min_horiz) {
-                lookout_state = YawLookoutState::Left;
-                lookout_timer = 0.0;
-                lookout_start_time = elapsed_time;
-                // std::cout << "[DEBUG] Started lookout to left\n";
-            } else if (dyaw > min_horiz) {
-                lookout_state = YawLookoutState::Right;
-                lookout_timer = 0.0;
-                lookout_start_time = elapsed_time;
-                // std::cout << "[DEBUG] Started lookout to right\n";
-            }
-        } else if (lookout_state == YawLookoutState::Left) {
-            // Wait for crossing to right
-            if (dyaw > min_horiz) {
-                lookout_timer = (elapsed_time - lookout_start_time) * 1000.0;
-                if (lookout_timer >= config.min_lookout_time_ms) {
-                    std::cout << "[INFO] Lookout (left-to-right) took " << lookout_timer << " ms (min required: " << config.min_lookout_time_ms << ")\n";
-                    noLookTime = 0.0;
-                    warning_triggered = false;
+            warning_triggered = false;
+            repeat_timer = 0.0;
+            warning_start_time = 0.0;
+            looked_left = looked_right = looked_up = looked_down = false;
+            std::cout << "[DEBUG] Lookout flags reset after successful lookout." << std::endl;
+        } else {
+            if (!warning_triggered && noLookTime >= config.max_time_ms) {
+                warning_triggered = true;
+                repeat_timer = 0.0;
+                warning_start_time = elapsed_time;
+                int cur_volume = config.start_volume;
+                // Reset lookout flags after warning so user can start a fresh cycle
+                looked_left = looked_right = looked_up = looked_down = false;
+                std::cout << "[DEBUG] Lookout flags reset after warning triggered." << std::endl;
+                // Optionally reset timer to avoid immediate repeat (more forgiving UX)
+                noLookTime = 0.0;
+                std::cout << "[WARNING] Please perform a visual lookout!\n"
+                          << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
+                          << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
+                          << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
+                          << "    Volume: " << cur_volume << std::endl;
+                std::cout << "[DEBUG] Warning triggered!" << std::endl;
+                play_alarm_sound(config.audio_file, cur_volume);
+            } else if (warning_triggered) {
+                repeat_timer += POLL_INTERVAL * 1000.0;
+                double ramp_elapsed = elapsed_time - warning_start_time;
+                int cur_volume = config.start_volume;
+                if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
+                    double ramp = (std::min)(1.0, ramp_elapsed / config.volume_ramp_time_ms);
+                    cur_volume = (int)(config.start_volume + ramp * (config.end_volume - config.start_volume));
+                }
+                if (repeat_timer >= config.repeat_interval_ms) {
+                    std::cout << "[WARNING] Please perform a visual lookout! (repeat)\n"
+                              << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
+                              << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
+                              << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
+                              << "    Volume: " << cur_volume << std::endl;
+                    std::cout << "[DEBUG] Repeat warning triggered!" << std::endl;
+                    play_alarm_sound(config.audio_file, cur_volume);
                     repeat_timer = 0.0;
-                    warning_start_time = 0.0;
-                } else {
-                    // std::cout << "[INFO] Lookout (left-to-right) too quick: " << lookout_timer << " ms\n";
                 }
-                lookout_state = YawLookoutState::None;
-            } else if (std::abs(dyaw) < min_horiz) {
-                // Returned to center before reaching other side
-                lookout_state = YawLookoutState::None;
-                lookout_timer = 0.0;
-            }
-        } else if (lookout_state == YawLookoutState::Right) {
-            // Wait for crossing to left
-            if (dyaw < -min_horiz) {
-                lookout_timer = (elapsed_time - lookout_start_time) * 1000.0;
-                if (lookout_timer >= config.min_lookout_time_ms) {
-                    std::cout << "[INFO] Lookout (right-to-left) took " << lookout_timer << " ms (min required: " << config.min_lookout_time_ms << ")\n";
-                    noLookTime = 0.0;
-                    warning_triggered = false;
-                    repeat_timer = 0.0;
-                    warning_start_time = 0.0;
-                } else {
-                    // std::cout << "[INFO] Lookout (right-to-left) too quick: " << lookout_timer << " ms\n";
-                }
-                lookout_state = YawLookoutState::None;
-            } else if (std::abs(dyaw) < min_horiz) {
-                // Returned to center before reaching other side
-                lookout_state = YawLookoutState::None;
-                lookout_timer = 0.0;
             }
         }
 
-            // Only increment noLookTime and allow warnings if primed
-            if (primed) {
-                noLookTime += POLL_INTERVAL * 1000.0; // ms
-                if (!warning_triggered && noLookTime >= config.max_time_ms) {
-                    warning_triggered = true;
-                    repeat_timer = config.repeat_interval_ms; // force immediate first warning
-                    warning_start_time = elapsed_time;
-                }
-                if (warning_triggered) {
-                    repeat_timer += POLL_INTERVAL * 1000.0;
-                    double ramp_elapsed = elapsed_time - warning_start_time;
-                    int cur_volume = config.start_volume;
-                    if (config.volume_ramp_time_ms > 0 && config.end_volume != config.start_volume) {
-                        double ramp = (std::min)(1.0, ramp_elapsed / config.volume_ramp_time_ms);
-                        cur_volume = (int)(config.start_volume + ramp * (config.end_volume - config.start_volume));
-                    }
-                    if (repeat_timer >= config.repeat_interval_ms) {
-                        std::cout << "[WARNING] Please perform a visual lookout!\n"
-                                  << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
-                                  << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
-                                  << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
-                                  << "    Volume: " << cur_volume << std::endl;
-                        play_alarm_sound(config.audio_file, cur_volume);
-                        repeat_timer = 0.0;
-                    }
-                }
-            }
-
-        }
         elapsed_time += POLL_INTERVAL * 1000.0;
         std::this_thread::sleep_for(std::chrono::milliseconds((int)(POLL_INTERVAL * 1000)));
-    
+    }
     ovr_Destroy(session);
     ovr_Shutdown();
     return 0;
 }
-
