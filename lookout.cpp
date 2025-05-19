@@ -26,6 +26,7 @@
 #include <vector>
 #include <deque>
 #include <algorithm>
+#include <iomanip> // For std::fixed, std::setprecision in debug output
 
 
 struct LookoutAlarmConfig {
@@ -111,7 +112,6 @@ sf::Sound* play_alarm_sound(const std::string& audio_file, int volume) {
     active_sounds.erase(
         std::remove_if(active_sounds.begin(), active_sounds.end(),
             [](const std::unique_ptr<sf::Sound>& snd) {
-                // MODIFICATION HERE: Use sf::SoundSource::Status::Playing
                 return snd->getStatus() != sf::SoundSource::Status::Playing;
             }),
         active_sounds.end()
@@ -172,13 +172,14 @@ int main() {
     
     const size_t WINDOW_SIZE = 600; 
     std::deque<double> yaw_window, pitch_window;
-    double elapsed_time = 0.0;
+    double elapsed_time = 0.0; // This will store total time in milliseconds
 
     double center_window_degrees = 20.0;
     double center_hold_time_seconds = 3.0;
-    double center_hold_timer = 0.0;
+    double center_hold_timer = 0.0; // In seconds
     bool center_reset_active = false;
-    static double last_debug_time = 0.0; // For throttling debug output
+    // static double last_debug_time = 0.0; // REMOVED: Global static, was used by some event messages, now unused.
+                                         // The periodic state dump uses its own local static.
     {
         std::ifstream f("settings.json");
         if (f) {
@@ -197,11 +198,11 @@ int main() {
     // Per-alarm state structs
     struct AlarmState {
         bool warning_triggered = false;
-        double noLookTime = 0.0, repeat_timer = 0.0, warning_start_time = 0.0;
+        double noLookTime = 0.0, repeat_timer = 0.0, warning_start_time = 0.0; // Times in ms
         bool looked_left = false, looked_right = false, looked_up = false, looked_down = false;
         bool prev_looked_left = false, prev_looked_right = false;
-        double alarm_silence_until = 0.0;
-        double left_look_time = -1.0, right_look_time = -1.0;
+        double alarm_silence_until = 0.0; // Timestamp in ms
+        double left_look_time = -1.0, right_look_time = -1.0; // Timestamps in ms
         sf::Sound* current_sound_instance = nullptr; 
         bool silence_message_printed = false; // Track if we've printed the silence message
     };
@@ -230,10 +231,9 @@ int main() {
                 }
             }
 
-
             std::vector<double> sorted_pitch(pitch_window.begin(), pitch_window.end());
             std::sort(sorted_pitch.begin(), sorted_pitch.end());
-            n = sorted_pitch.size(); // Re-assign n for pitch window size
+            n = sorted_pitch.size(); 
             q1_idx = n / 4;
             q3_idx = (3 * n) / 4;
              if (n > 0 && q3_idx < n && q1_idx <= q3_idx) { 
@@ -258,6 +258,8 @@ int main() {
                     alarm_states[i].looked_down = false;
                     alarm_states[i].left_look_time = -1.0;
                     alarm_states[i].right_look_time = -1.0;
+                    // Also reset silence message flag here if appropriate, though it's usually tied to active silence periods
+                    // alarm_states[i].silence_message_printed = false; 
                 }
                 center_reset_active = true;
                 std::cout << "[DEBUG] Center reset: All lookout flags reset after holding within " << center_window_degrees << "° for " << center_hold_time_seconds << " seconds." << std::endl;
@@ -267,7 +269,6 @@ int main() {
             center_reset_active = false;
         }
         
-        // Update rolling window once per main loop iteration, not inside the alarm loop
         yaw_window.push_back(yaw_deg);
         pitch_window.push_back(pitch_deg);
         if (yaw_window.size() > WINDOW_SIZE) yaw_window.pop_front();
@@ -280,7 +281,6 @@ int main() {
             bool prev_looked_left_tmp = state.looked_left;
             bool prev_looked_right_tmp = state.looked_right;
 
-            // Assuming min_horizontal_angle and min_vertical_angle are total FOV for lookout
             double horiz_thresh = config.min_horizontal_angle / 2.0;
             double vert_thresh = config.min_vertical_angle / 2.0;
 
@@ -288,44 +288,57 @@ int main() {
                 state.looked_left = true;
                 state.left_look_time = elapsed_time;
                 state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                if (elapsed_time - last_debug_time >= 1000.0) {
-                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L set (0->1)." << std::endl;
-                    last_debug_time = elapsed_time;
-                }
+                // UNTHROTTLED: This is an event, print it when it happens.
+                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after L set (0->1)." << std::endl;
             }
             if (dyaw >  horiz_thresh && !state.looked_right) { 
                 state.looked_right = true;
                 state.right_look_time = elapsed_time;
                 state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
-                if (elapsed_time - last_debug_time >= 1000.0) {
-                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after R set (0->1)." << std::endl;
-                    last_debug_time = elapsed_time;
-                }
+                 // UNTHROTTLED: This is an event, print it when it happens.
+                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced for " << config.silence_after_look_ms << " ms after R set (0->1)." << std::endl;
             }
             if (dpitch < -vert_thresh) state.looked_down = true; 
             if (dpitch >  vert_thresh) state.looked_up = true;  
 
-
             state.prev_looked_left = prev_looked_left_tmp;
             state.prev_looked_right = prev_looked_right_tmp;
             
-            static double last_debug_time = 0.0;
-            // Throttled debug output
-            if (elapsed_time - last_debug_time >= 1000.0) { // Print roughly every second
-                 std::cout << "[DEBUG] Alarm " << i << ": dyaw: " << dyaw << ", dpitch: " << dpitch << " | C(y,p): (" << center_yaw << "," << center_pitch << ") | L:" << state.looked_right << " R:" << state.looked_left << " U:" << state.looked_up << " D:" << state.looked_down << " | noLook: " << state.noLookTime << " | warn: " << state.warning_triggered << " | silenceU: " << state.alarm_silence_until << std::endl;
-                if (i == alarms.size() - 1) last_debug_time = elapsed_time; // Reset for the next second after last alarm's debug
+            // This is the periodic state dump. It uses a static variable local to this loop scope.
+            // It's initialized once and shared across all iterations of i for a given main loop pass.
+            // last_debug_time is updated only after the last alarm, ensuring all alarms print together.
+            static double last_periodic_state_dump_time = 0.0; 
+            if (elapsed_time - last_periodic_state_dump_time >= 1000.0) { // Print roughly every second
+                 std::cout << std::fixed << std::setprecision(1) // Apply formatting for this block
+                           << "[DEBUG] Alarm " << i << ": dyaw: " << dyaw << ", dpitch: " << dpitch
+                           << " | C(y,p): (" << center_yaw << "," << center_pitch << ")"
+                           << " | L:" << state.looked_left << " R:" << state.looked_right // Note: In your logic, L is dyaw < -thresh, R is dyaw > thresh. Swapped L/R here for clarity.
+                           << " U:" << state.looked_up << " D:" << state.looked_down
+                           << " | noLook: " << state.noLookTime / 1000.0 << "s"
+                           << " | warn: " << state.warning_triggered
+                           << " | silenceU: " << (state.alarm_silence_until > elapsed_time ? (state.alarm_silence_until - elapsed_time)/1000.0 : 0.0) << "s_rem"
+                           << std::endl;
+                if (i == alarms.size() - 1) { // After processing the last alarm for this periodic dump
+                    last_periodic_state_dump_time = elapsed_time; 
+                }
             }
-
 
             state.noLookTime += POLL_INTERVAL * 1000.0;
 
+            // This block handles the "skipping first warning due to silence" scenario.
+            // The `continue` ensures that if this path is taken, the later warning logic is skipped for this tick.
             if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
                 if (elapsed_time < state.alarm_silence_until) {
-                    std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning." << std::endl;
+                    // FIXED SPAM: Added flag check here
+                    if (!state.silence_message_printed) {
+                        std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning." << std::endl;
+                        state.silence_message_printed = true; // Set flag
+                    }
                     // Consider if noLookTime should reset or continue accumulating
                     // state.noLookTime = 0; // If silence should grant a full reprieve
-                    continue; 
+                    continue; // Skip further warning processing for this alarm this tick
                 }
+                // If not silenced (elapsed_time >= state.alarm_silence_until), flow continues to main warning logic below.
             }
             
             if (state.looked_left && state.looked_right && state.looked_up && state.looked_down) {
@@ -337,7 +350,7 @@ int main() {
                     state.warning_start_time = 0.0;
                     state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
                     state.left_look_time = state.right_look_time = -1.0;
-                    state.silence_message_printed = false; // Reset the flag when alarm is reset
+                    state.silence_message_printed = false; 
                     if (state.current_sound_instance && state.current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
                         state.current_sound_instance->stop();
                     }
@@ -348,11 +361,12 @@ int main() {
                             if (j != i && alarms[j].min_horizontal_angle < config.min_horizontal_angle) {
                                 alarm_states[j].noLookTime = 0.0;
                                 alarm_states[j].warning_triggered = false;
+                                // ... (reset other fields for alarm_states[j] as above) ...
                                 alarm_states[j].repeat_timer = 0.0;
                                 alarm_states[j].warning_start_time = 0.0;
                                 alarm_states[j].looked_left = alarm_states[j].looked_right = alarm_states[j].looked_up = alarm_states[j].looked_down = false;
                                 alarm_states[j].left_look_time = alarm_states[j].right_look_time = -1.0;
-                                alarm_states[j].silence_message_printed = false; // Reset the flag when alarm is reset
+                                alarm_states[j].silence_message_printed = false;
                                 if (alarm_states[j].current_sound_instance && alarm_states[j].current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
                                     alarm_states[j].current_sound_instance->stop();
                                 }
@@ -365,8 +379,10 @@ int main() {
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout not counted: L/R time diff too short (" << lr_time_diff << " ms < " << config.min_lookout_time_ms << " ms) or one side not registered." << std::endl;
                     state.looked_left = state.looked_right = false; 
                     state.left_look_time = state.right_look_time = -1.0;
+                    // state.silence_message_printed = false; // If a failed L/R attempt should make it re-print silence messages
                 }
-            } else {
+            } else { // Lookout not complete
+                // This block handles silencing an *already active* warning if L/R look occurs
                 if (state.warning_triggered && ((!state.prev_looked_left && state.looked_left) || (!state.prev_looked_right && state.looked_right))) {
                     state.alarm_silence_until = elapsed_time + config.silence_after_look_ms;
                     if (!state.silence_message_printed) {
@@ -375,24 +391,30 @@ int main() {
                     }
                 }
 
+                // This block handles the *initial triggering* of a warning, or repeating it.
+                // The `continue` in the earlier block (around line 195 now) ensures this is only reached
+                // if the alarm is NOT silenced by that initial check.
                 if (!state.warning_triggered && state.noLookTime >= config.max_time_ms) {
+                    // This inner 'if' is for the case where alarm_silence_until might have been set by other means
+                    // (e.g. by the "silence during warning" block above) and the first check (line ~195) was not met.
+                    // Or, more likely, this `if` is primarily for the `else` path.
                     if (elapsed_time < state.alarm_silence_until) {
                         if (!state.silence_message_printed) {
-                            std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning." << std::endl;
-                            state.silence_message_printed = true; // Mark that we've printed for this silence period
+                            std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced due to recent L/R, skipping first warning (secondary check)." << std::endl;
+                            state.silence_message_printed = true;
                         }
-                        // state.noLookTime = 0; // Optional: if silence should reset the timer completely
-                    } else {
-                        state.silence_message_printed = false; // Reset here, as the silence period has ended
+                    } else { // Warning should trigger (not silenced)
+                        state.silence_message_printed = false; // Reset flag as silence period (if any) has ended
                         state.left_look_time = state.right_look_time = -1.0; 
                         state.warning_triggered = true;
-                        state.repeat_timer = 0.0;
+                        state.repeat_timer = 0.0; // Reset repeat timer for this new warning instance
                         state.warning_start_time = elapsed_time;
                         int cur_volume = config.start_volume;
-                        state.looked_left = state.looked_right = state.looked_up = state.looked_down = false;
+                        state.looked_left = state.looked_right = state.looked_up = state.looked_down = false; // Reset look flags upon warning
                         std::cout << "[DEBUG] Alarm " << i << ": Lookout flags reset after warning triggered." << std::endl;
                         state.noLookTime = 0.0; 
                         std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout!\n"
+                                  << std::fixed << std::setprecision(1)
                                   << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
                                   << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
                                   << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
@@ -400,7 +422,7 @@ int main() {
                         std::cout << "[DEBUG] Alarm " << i << ": Warning triggered!" << std::endl;
                         state.current_sound_instance = play_alarm_sound(config.audio_file, cur_volume); 
                     }
-                } else if (state.warning_triggered) {
+                } else if (state.warning_triggered) { // Warning is already active, handle repeats & volume
                     state.repeat_timer += POLL_INTERVAL * 1000.0;
                     
                     double ramp_elapsed = elapsed_time - state.warning_start_time;
@@ -410,18 +432,24 @@ int main() {
                         current_ramped_volume = static_cast<int>(config.start_volume + ramp_progress * (config.end_volume - config.start_volume));
                     }
 
-                    // MODIFICATION HERE: Use sf::SoundSource::Status::Playing
                     if (state.current_sound_instance != nullptr && state.current_sound_instance->getStatus() == sf::SoundSource::Status::Playing) {
                         state.current_sound_instance->setVolume(static_cast<float>(current_ramped_volume));
-                    } else if (state.current_sound_instance != nullptr) {
-                        state.current_sound_instance = nullptr;
+                    } else if (state.current_sound_instance != nullptr) { // Sound finished or stopped
+                        state.current_sound_instance = nullptr; // Clear pointer if sound stopped on its own
                     }
 
                     if (state.repeat_timer >= config.repeat_interval_ms) {
                         if (elapsed_time < state.alarm_silence_until) {
-                            std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced, skipping repeat warning." << std::endl;
+                            // If silenced during an active warning, don't repeat the sound yet.
+                            // The silence_message_printed flag should have been set when silence began.
+                            if(!state.silence_message_printed){ // Should already be true, but as a safeguard
+                                std::cout << "[DEBUG] Alarm " << i << ": Alarm silenced, skipping repeat warning." << std::endl;
+                                state.silence_message_printed = true;
+                            }
                         } else {
+                            state.silence_message_printed = false; // No longer silenced, allow future silence messages.
                             std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! (repeat)\n"
+                                      << std::fixed << std::setprecision(1)
                                       << "    Median center (yaw, pitch): (" << center_yaw << ", " << center_pitch << ")\n"
                                       << "    Current (yaw, pitch): (" << yaw_deg << ", " << pitch_deg << ")\n"
                                       << "    Relative (dyaw, dpitch): (" << dyaw << ", " << dpitch << ")\n"
@@ -429,15 +457,16 @@ int main() {
                             std::cout << "[DEBUG] Alarm " << i << ": Repeat warning triggered!" << std::endl;
                             state.current_sound_instance = play_alarm_sound(config.audio_file, current_ramped_volume);
                         }
-                        state.repeat_timer = 0.0;
+                        state.repeat_timer = 0.0; // Reset repeat timer in both cases (silenced or repeated)
                     }
                 }
             }
-        }
+        } // End of per-alarm loop
 
-        elapsed_time += POLL_INTERVAL * 1000.0;
-        std::this_thread::sleep_for(std::chrono::milliseconds((int)(POLL_INTERVAL * 1000)));
-    }
+        elapsed_time += POLL_INTERVAL * 1000.0; // Advance time
+        std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
+    } // End of main while loop
+
     ovr_Destroy(session);
     ovr_Shutdown();
     return 0;
