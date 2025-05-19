@@ -16,7 +16,10 @@
 #define POLL_INTERVAL 0.05 
 #include <fstream>
 #include "json.hpp" 
-#include <SFML/Audio.hpp> 
+#include <SFML/Audio.hpp>
+#include <windows.h> 
+#include <SFML/System/Time.hpp>
+#include <SFML/System/FileInputStream.hpp>
 
 #include <unordered_map>
 #include <memory>
@@ -104,7 +107,30 @@ sf::Music* get_or_create_sound_player(const std::string& audio_file) {
     return music.release();
 }
 
-int main() {
+// Forward declaration for our core application logic
+int app_core_logic(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow);
+
+// Windows Subsystem Entry Point
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+    // Mark parameters as unused for now. nCmdShow might be used if we create an initial window.
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+
+    // For now, directly call the original main logic.
+    // In future steps, this WinMain will handle creating an invisible window,
+    // setting up the tray icon, running a message loop, and launching
+    // app_core_logic in a separate thread.
+    return app_core_logic(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
+}
+
+// Renamed original main function, now app_core_logic
+int app_core_logic(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hInstance);
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+    UNREFERENCED_PARAMETER(nCmdShow);
     ovrResult result = ovr_Initialize(nullptr);
     if (OVR_FAILURE(result)) { std::cerr << "OVR Init Fail" << std::endl; return 1; }
 
@@ -286,6 +312,20 @@ int main() {
                 std::cout << "[INFO] Detected Condor flight start." << std::endl;
             } else {
                 std::cout << "[INFO] Detected Condor flight end." << std::endl;
+                // Reset all alarm states as the flight has ended
+                for (AlarmState& s : alarm_states) {
+                    if (s.sound_player && s.sound_player->getStatus() == sf::SoundSource::Status::Playing) {
+                        s.sound_player->stop();
+                    }
+                    s.warning_triggered = false;
+                    s.noLookTime_ms = 0.0;
+                    s.repeat_timer_ms = 0.0;
+                    s.warning_start_time_ms = 0.0;
+                    s.looked_left_ever = false; s.looked_right_ever = false; s.looked_up_ever = false; s.looked_down_ever = false;
+                    s.left_ever_time_ms = -1.0; s.right_ever_time_ms = -1.0;
+                    s.alarm_silence_until_ms = 0.0;
+                    s.silence_message_printed_this_period = false;
+                }
             }
         }
 
@@ -299,16 +339,28 @@ int main() {
 
         double displayTime = ovr_GetPredictedDisplayTime(session, 0);
         ovrTrackingState ts = ovr_GetTrackingState(session, displayTime, ovrTrue);
-        if (!(ts.StatusFlags & ovrStatus_OrientationTracked)) { 
-            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
-            elapsed_time_ms += POLL_INTERVAL * 1000.0; 
-            static double last_no_track_warn = 0;
-            if(elapsed_time_ms - last_no_track_warn > 5000) {
-                std::cerr << "[WARNING] No HMD tracking!" << std::endl;
-                last_no_track_warn = elapsed_time_ms;
+        ovrSessionStatus sessionStatus;
+        ovr_GetSessionStatus(session, &sessionStatus);
+
+        static bool hmd_status_ok_previously = true; 
+        bool hmd_currently_ok = (ts.StatusFlags & ovrStatus_OrientationTracked) &&
+                                /* (ts.StatusFlags & ovrStatus_HmdConnected) && // Removed for compatibility with older SDKs */
+                                sessionStatus.HmdMounted &&
+                                !sessionStatus.DisplayLost;
+
+        if (!hmd_currently_ok) {
+            if (hmd_status_ok_previously) { // Only print if status just changed to not OK
+                std::cerr << "[WARNING] HMD not ready (not tracked/connected, not mounted, or display lost). Pausing alarms." << std::endl;
             }
-            continue; 
+            hmd_status_ok_previously = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(POLL_INTERVAL * 1000)));
+            elapsed_time_ms += POLL_INTERVAL * 1000.0;
+            continue;
         }
+        if (!hmd_status_ok_previously) { // HMD has become OK now
+             std::cout << "[INFO] HMD is now ready. Resuming alarms." << std::endl;
+        }
+        hmd_status_ok_previously = true; 
         ovrPosef pose = ts.HeadPose.ThePose;
         ovrQuatf q = pose.Orientation;
         double yaw_deg, pitch_deg;
@@ -539,3 +591,4 @@ int main() {
     ovr_Shutdown();
     return 0;
 }
+// Ensure there's no other 'main' function defined elsewhere by mistake.
