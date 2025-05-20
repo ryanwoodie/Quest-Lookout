@@ -2,7 +2,8 @@
   "alarms": [
     {
       "min_horizontal_angle": 45.0,
-      "min_vertical_angle": 10.0,
+      "min_vertical_angle_up": 7.5,
+      "min_vertical_angle_down": 0,
       "max_time_ms": 10000,
       "audio_file": "lookout.ogg",
       "start_volume": 50,
@@ -14,10 +15,11 @@
     },
     {
       "min_horizontal_angle": 120.0,
-      "min_vertical_angle": 15.0,
+      "min_vertical_angle_up": 10,
+      "min_vertical_angle_down": 0,
       "max_time_ms": 20000,
       "audio_file": "notalentassclown.ogg",
-      "start_volume": 5,
+      "start_volume": 50,
       "end_volume": 100,
       "volume_ramp_time_ms": 60000,
       "repeat_interval_ms": 30000,
