@@ -302,13 +302,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 // Renamed original main function, now app_core_logic
 int app_core_logic() // Signature updated for threading
 {
-    ovrResult result = ovr_Initialize(nullptr);
-    if (OVR_FAILURE(result)) { std::cerr << "OVR Init Fail" << std::endl; return 1; }
+    // NEW WAY: Initialize Oculus SDK to be invisible (no rendering to HMD)
+    ovrInitParams initParams = {0};
+    initParams.Flags = ovrInit_Invisible; // Tell the runtime this app won't render to the HMD
+    initParams.RequestedMinorVersion = OVR_MINOR_VERSION; // Good practice to specify this
+
+    ovrResult result = ovr_Initialize(&initParams);
+    if (OVR_FAILURE(result)) {
+        ovrErrorInfo errorInfo;
+        ovr_GetLastErrorInfo(&errorInfo);
+        std::cerr << "[ERROR] OVR Init Fail (with ovrInit_Invisible): " << errorInfo.ErrorString << std::endl;
+        return 1; // Exit if invisible init fails
+    }
+    std::cout << "[INFO] OVR Initialized with ovrInit_Invisible flag." << std::endl;
 
     ovrSession session;
-    ovrGraphicsLuid luid;
+    ovrGraphicsLuid luid; // This will still be populated but isn't used for rendering by this app
     result = ovr_Create(&session, &luid);
-    if (OVR_FAILURE(result)) { std::cerr << "OVR Create Fail" << std::endl; ovr_Shutdown(); return 1; }
+    if (OVR_FAILURE(result)) {
+        ovrErrorInfo errorInfo;
+        ovr_GetLastErrorInfo(&errorInfo);
+        std::cerr << "[ERROR] OVR Create Fail: " << errorInfo.ErrorString << std::endl;
+        ovr_Shutdown();
+        return 1;
+    }
 
     std::vector<LookoutAlarmConfig> alarms = load_configs("settings.json");
     if (alarms.empty()) { std::cerr << "No Alarms Loaded" << std::endl; ovr_Destroy(session); ovr_Shutdown(); return 1; }
