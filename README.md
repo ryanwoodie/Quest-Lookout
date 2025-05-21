@@ -10,7 +10,7 @@ Quest Lookout is a utility for Oculus/Meta Quest users and Condor sim pilots to 
 - **Easy configuration**: All settings are in a single JSON file; sample audio files are included.
 
 ## How to Use
-1. **Install**: Download the ZIP file from releases and extract it to a folder on your PC. Make sure your Condor log file path is set up correctly in `settings.json`.
+1. **Install**: [Download the latest release ZIP here](https://github.com/ryanwoodie/Quest-Lookout/releases) and extract it to a folder on your PC. Make sure your Condor log file path is set up correctly in `settings.json`.
 2. **Configure**: Edit `settings.json` to adjust alarm angles, intervals, and audio files as you like. See the sample settings.json for details.
 3. **Run**: Launch `lookout.exe` before starting your VR flight sim session. The tray icon will indicate the app is running.
 4. **Respond to prompts**: When you hear an alarm, perform a lookout scan to reset the alarm and build good lookout habits.
