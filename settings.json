@@ -1,78 +1,34 @@
 {
-  // "alarms": Defines a list of different alarm configurations.
-  // You can have multiple alarms with different sensitivities and sounds.
   "alarms": [
     {
-      // "min_horizontal_angle": Total horizontal angle (left + right) you need to look.
-      // e.g., 45.0 means you need to look at least 22.5 degrees left AND 22.5 degrees right from your Oculus center.
-      // Set to 0 or negative to disable this specific alarm.
       "min_horizontal_angle": 45.0,
-
-      // "min_vertical_angle_up": Minimum upward angle (in degrees) from Oculus center to register an "up" look.
-      // Set to 0 or negative if an upward look is not required for this alarm.
-      "min_vertical_angle_up": 7.5,
-
-      // "min_vertical_angle_down": Minimum downward angle (in degrees, as a positive value) from Oculus center to register a "down" look.
-      // e.g., 5.0 means looking down by at least 5 degrees.
-      // Set to 0 or negative if a downward look is not required for this alarm.
-      "min_vertical_angle_down": 0,
-
-      // "max_time_ms": Maximum time (in milliseconds) allowed without completing a full lookout
-      // (all required directions for this alarm) before this alarm triggers.
-      "max_time_ms": 30000, // 30 seconds
-
-      // "audio_file": Path to the audio file (e.g., .ogg, .wav) for this alarm.
-      // If empty or not found, "beep.wav" (in the same directory as the .exe) will be used.
+      "min_vertical_angle": 10.0,
+      "max_time_ms": 10000,
       "audio_file": "lookout.ogg",
-
-      // "start_volume": Initial volume of the alarm sound (0-100).
       "start_volume": 50,
-
-      // "end_volume": Maximum volume the alarm sound will ramp up to (0-100).
       "end_volume": 100,
-
-      // "volume_ramp_time_ms": Time (in milliseconds) for the volume to ramp from start_volume to end_volume.
-      // If 0, volume is set to end_volume immediately.
-      "volume_ramp_time_ms": 30000, // 30 seconds to reach full volume
-
-      // "repeat_interval_ms": How often (in milliseconds) the alarm sound repeats if the lookout is still not met.
-      // Defaults to 5000ms if set below 100ms.
-      "repeat_interval_ms": 5000, // Repeats every 5 seconds
-
-      // "silence_after_look_ms": If an alarm is sounding, making a new significantstarting a new lookout
-      // will temporarily silence the audio for this duration (in milliseconds).
-      "silence_after_look_ms": 5000, // Silence for 5 seconds after a new L/R look
-
-      // "min_lookout_time_ms": Minimum time difference (in milliseconds) required between registering
-      // a "left" look and a "right" look for the horizontal lookout to be considered valid.
-      // Prevents quick head flicks from counting.
-      "min_lookout_time_ms": 2000 // 2 seconds minimum between registering far left and far right
+      "volume_ramp_time_ms": 30000,
+      "repeat_interval_ms": 5000,
+      "silence_after_look_ms": 5000,
+      "min_lookout_time_ms": 2000
     },
-    // To add another alarm, copy this entire object, change its parameters as desired, and add a comma between alarm objects in the array.
     {
       "min_horizontal_angle": 120.0,
-      "min_vertical_angle_up": 10,
-      "min_vertical_angle_down": 0,
-      "max_time_ms": 90000,
+      "min_vertical_angle": 15.0,
+      "max_time_ms": 20000,
       "audio_file": "notalentassclown.ogg",
-      "start_volume": 50,
+      "start_volume": 5,
       "end_volume": 100,
       "volume_ramp_time_ms": 60000,
       "repeat_interval_ms": 30000,
-      "silence_after_look_ms": 5000,
-      "min_lookout_time_ms": 2000
+      "silence_after_look_ms": 10000,
+      "min_lookout_time_ms": 1500
     }
-  ],
-
-  // "center_reset": Configures resetting lookout flags when looking straight ahead.
+  ]
+,
   "center_reset": {
-    // "window_degrees": If head yaw and pitch are both within +/- this angle (degrees) from Oculus origin...
     "window_degrees": 10,
-    // "...for this duration (seconds), all lookout direction flags (L/R/U/D) for all alarms are reset."
     "hold_time_seconds": 4
   },
-
-  // "condor_log_path": Full path to Condor flight simulator's log file (e.g., Logfile.txt).
-  // Used to automatically enable/disable alarms based on flight status.
   "condor_log_path": "C:\\Condor3\\Logs\\Logfile.txt"
 }
