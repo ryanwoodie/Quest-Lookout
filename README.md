@@ -37,10 +37,6 @@ Quest Lookout is a utility for Oculus/Meta Quest users and Condor sim pilots to 
 3. **Build the project** using Visual Studio or your preferred toolchain. Link against SFML and Oculus SDK as needed.
 4. **Copy required DLLs and audio files** to the output directory if not handled by your build system.
 
-### Notes
-- The `.gitignore` is set up to ignore build artifacts but keep sample audio and DLLs needed for running.
-- You can customize alarms and behavior via `settings.json`.
-- The included Python script (`lookout.py`) is a reference or alternative for rapid prototyping.
 
 ---
 

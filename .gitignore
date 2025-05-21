@@ -1,3 +1,6 @@
+RELEASE_COMMANDS_PRIVATE.md
+*.zip
+
 # Build and binary artifacts
 *.exe
 *.obj
