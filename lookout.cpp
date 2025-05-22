@@ -554,16 +554,25 @@ int app_core_logic() // Signature updated for threading
         double yaw_deg, pitch_deg;
         quat_to_yaw_pitch(q, yaw_deg, pitch_deg);
 
-        double center_yaw = yaw_deg, center_pitch = pitch_deg;
-        if (!yaw_window.empty()) { 
-            std::vector<double> sorted_yaw(yaw_window.begin(), yaw_window.end());
-            std::sort(sorted_yaw.begin(), sorted_yaw.end());
-            if (!sorted_yaw.empty()) center_yaw = sorted_yaw[sorted_yaw.size() / 2];
-            
-            std::vector<double> sorted_pitch(pitch_window.begin(), pitch_window.end());
-            std::sort(sorted_pitch.begin(), sorted_pitch.end());
-            if(!sorted_pitch.empty()) center_pitch = sorted_pitch[sorted_pitch.size() / 2];
-        }
+        // New logic: Use fixed forward-looking center (Quest default HMD startup orientation).
+        double center_yaw = 0.0;
+        double center_pitch = 0.0;
+        // The yaw_window and pitch_window (and their update logic further down)
+        // are no longer used for this centering calculation. They are kept to minimize
+        // changes to other parts of the code, as per the request "Don't edit/change other stuff".
+        // 
+        // --- Start of commented out original self-adjusting center calculation ---
+        // double center_yaw_original_logic = yaw_deg, center_pitch_original_logic = pitch_deg;
+        // if (!yaw_window.empty()) { 
+        //     std::vector<double> sorted_yaw(yaw_window.begin(), yaw_window.end());
+        //     std::sort(sorted_yaw.begin(), sorted_yaw.end());
+        //     if (!sorted_yaw.empty()) center_yaw_original_logic = sorted_yaw[sorted_yaw.size() / 2];
+        //     
+        //     std::vector<double> sorted_pitch(pitch_window.begin(), pitch_window.end());
+        //     std::sort(sorted_pitch.begin(), sorted_pitch.end());
+        //     if(!sorted_pitch.empty()) center_pitch_original_logic = sorted_pitch[sorted_pitch.size() / 2];
+        // }
+        // --- End of commented out original self-adjusting center calculation ---
 
         double dyaw = clamp_angle(yaw_deg - center_yaw);
         double dpitch = clamp_angle(pitch_deg - center_pitch);
