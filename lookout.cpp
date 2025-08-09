@@ -14,6 +14,7 @@
 #endif
 
 #define POLL_INTERVAL 0.05 
+#define LOG_CHECK_INTERVAL 1.0 // Check Condor log file every 1 second
 #include <fstream>
 #include "json.hpp" 
 #include <SFML/Audio.hpp>
@@ -400,7 +401,8 @@ int app_core_logic() // Signature updated for threading
 
     const size_t WINDOW_SIZE = static_cast<size_t>(30.0 / POLL_INTERVAL); 
     std::deque<double> yaw_window, pitch_window;
-    double elapsed_time_ms = 0.0; 
+    double elapsed_time_ms = 0.0;
+    double log_check_timer_ms = 0.0; // Timer for checking Condor log file
 
     double center_window_degrees = 20.0;
     double center_hold_time_seconds = 3.0;
@@ -433,8 +435,15 @@ int app_core_logic() // Signature updated for threading
     std::vector<AlarmState> alarm_states(alarms.size());
 
     while (true) {
-        // --- Monitor Condor log for flight status ---
-        bool previous_iteration_flight_status = condor_flight_active;
+        // Only check Condor log every LOG_CHECK_INTERVAL seconds
+        log_check_timer_ms += POLL_INTERVAL * 1000.0;
+        bool check_log_this_iteration = (log_check_timer_ms >= LOG_CHECK_INTERVAL * 1000.0);
+        
+        if (check_log_this_iteration) {
+            log_check_timer_ms = 0.0; // Reset the log check timer
+            
+            // --- Monitor Condor log for flight status ---
+            bool previous_iteration_flight_status = condor_flight_active;
 
         std::ifstream log_stream(condor_log_path, std::ios::in | std::ios::ate | std::ios::binary);
 
@@ -516,6 +525,7 @@ int app_core_logic() // Signature updated for threading
                 }
             }
         }
+        } // End of log check block
 
 
         // --- Only run detection/alarms if flight is active and headset tracked ---
@@ -554,25 +564,9 @@ int app_core_logic() // Signature updated for threading
         double yaw_deg, pitch_deg;
         quat_to_yaw_pitch(q, yaw_deg, pitch_deg);
 
-        // New logic: Use fixed forward-looking center (Quest default HMD startup orientation).
+        // Use fixed forward-looking center (Quest default HMD startup orientation)
         double center_yaw = 0.0;
         double center_pitch = 0.0;
-        // The yaw_window and pitch_window (and their update logic further down)
-        // are no longer used for this centering calculation. They are kept to minimize
-        // changes to other parts of the code, as per the request "Don't edit/change other stuff".
-        // 
-        // --- Start of commented out original self-adjusting center calculation ---
-        // double center_yaw_original_logic = yaw_deg, center_pitch_original_logic = pitch_deg;
-        // if (!yaw_window.empty()) { 
-        //     std::vector<double> sorted_yaw(yaw_window.begin(), yaw_window.end());
-        //     std::sort(sorted_yaw.begin(), sorted_yaw.end());
-        //     if (!sorted_yaw.empty()) center_yaw_original_logic = sorted_yaw[sorted_yaw.size() / 2];
-        //     
-        //     std::vector<double> sorted_pitch(pitch_window.begin(), pitch_window.end());
-        //     std::sort(sorted_pitch.begin(), sorted_pitch.end());
-        //     if(!sorted_pitch.empty()) center_pitch_original_logic = sorted_pitch[sorted_pitch.size() / 2];
-        // }
-        // --- End of commented out original self-adjusting center calculation ---
 
         double dyaw = clamp_angle(yaw_deg - center_yaw);
         double dpitch = clamp_angle(pitch_deg - center_pitch);
