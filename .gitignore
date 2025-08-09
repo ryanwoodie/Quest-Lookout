@@ -1,0 +1,39 @@
+RELEASE_COMMANDS_PRIVATE.md
+*.zip
+
+# Build and binary artifacts
+*.exe
+*.obj
+*.ilk
+*.pdb
+*.dll
+!sfml-audio-3.dll
+!sfml-system-3.dll
+
+# Python virtual environments
+.venv/
+
+# VSCode settings (optional, keep if you want to share tasks/settings)
+.vscode/
+
+# SFML build directory (if not needed in repo)
+SFML-3.0.0/
+
+# Ignore all .wav files except beep.wav
+*.wav
+!beep.wav
+
+# Ignore all .ogg files except sample ones
+*.ogg
+!lookout.ogg
+!notalentassclown.ogg
+
+# OS/IDE junk
+.DS_Store
+Thumbs.db
+
+# Settings and config (keep for sample)
+!settings.json
+
+# JSON for code
+!json.hpp
