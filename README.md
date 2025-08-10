@@ -1,43 +1,119 @@
-# Quest Lookout
+# Quest Lookout VR Safety Monitor
 
-Quest Lookout is a utility for Oculus/Meta Quest users and Condor sim pilots to reinforce proper visual lookout habits during VR flight simulation. It provides customizable audio alarms to prompt users to perform lookout scans, ensuring good situational awareness and head movement habits.
+**Quest Lookout** is a VR safety tool for flight simulation that promotes proper traffic scanning habits during VR flights. It monitors your head movements through your Oculus/Meta Quest headset and provides audio reminders when you haven't performed adequate lookout patterns.
 
-## Features
-- **Customizable visual lookout alarms**: Configure horizontal and vertical sweep angles, alarm intervals, and minimum lookout times via `settings.json`.
-- **Audio prompts**: Plays configurable sound files (e.g., `lookout.ogg`, `beep.wav`) as reminders.
-- **Automatic detection of VR session**: Monitors your Condor log file to activate only during flights.
-- **Volume ramping and silence periods**: Prevents alarm fatigue by ramping volume and silencing after successful lookouts.
-- **Easy configuration**: All settings are in a single JSON file; sample audio files are included.
+## 🎯 Why Use Quest Lookout?
 
-## How to Use
-1. **Install**: [Download the latest release ZIP here](https://github.com/ryanwoodie/Quest-Lookout/releases) and extract it to a folder on your PC. Make sure your Condor log file path is set up correctly in `settings.json`.
-2. **Configure**: Edit `settings.json` to adjust alarm angles, intervals, and audio files as you like. See the sample settings.json for details.
-3. **Run**: Launch `lookout.exe` before starting your VR flight sim session. The tray icon will indicate the app is running.
-4. **Respond to prompts**: When you hear an alarm, perform a lookout scan to reset the alarm and build good lookout habits.
+VR flight simulation can cause **reduced situational awareness** compared to real flying. Quest Lookout helps maintain:
+- ✈️ **Proper traffic scanning habits** - Regular left/right/up lookout patterns
+- 🚨 **Safety awareness** - Audio alerts when you focus too long in one direction  
+- 🎮 **Real-world skills transfer** - Build habits that work in actual aircraft
+- 👀 **Visual discipline** - Prevents tunnel vision common in VR
 
-## Developer Notes: Compiling/Building
-### Files
-- `lookout.exe` – Main application (prebuilt, if available)
-- `lookout.cpp`, `lookout.py` – Source code (C++ and Python versions)
-- `settings.json` – User-editable configuration
-- `lookout.ogg`, `notalentassclown.ogg` (use this if you really want to torture pilots into never missing a lookout), `beep.wav` – Sample audio files
-- `sfml-audio-3.dll`, `sfml-system-3.dll` – Required SFML libraries
-- `json.hpp` – Header for JSON parsing
+## 🚀 Quick Start
 
-### Prerequisites
-- **Windows** (tested on Windows 10/11)
-- **Oculus SDK** (OVR)
-- **SFML 3.x** (for audio)
-- **nlohmann/json** (`json.hpp` included)
-- **Visual Studio** (recommended) or any C++17-compatible compiler
+### Step 1: Download & Setup
+1. **Download** the [latest release](https://github.com/ryanwoodie/Quest-Lookout/releases)
+2. **Extract** to any folder on your PC
+3. **Run `setup.bat`** for guided first-time configuration
 
-### Building
-1. **Clone the repo** and ensure all dependencies are present.
-2. **Install SFML** and ensure `sfml-audio-3.dll`, `sfml-system-3.dll` are in the build output or project root.
-3. **Build the project** using Visual Studio or your preferred toolchain. Link against SFML and Oculus SDK as needed.
-4. **Copy required DLLs and audio files** to the output directory if not handled by your build system.
+### Step 2: Configure Your Alarms  
+1. **Launch** `settings_manager.bat` to open the configuration GUI
+2. **Add/edit alarms** with different sensitivity levels:
+   - **Gentle reminder**: 45° lookout every 30 seconds
+   - **Comprehensive scan**: 120° lookout every 90 seconds  
+3. **Customize audio files** and volume settings
+4. **Save settings** and close the GUI
 
+### Step 3: Start Flying Safely
+1. **Launch Quest Lookout**: Run `lookout.exe` 
+2. **Check system tray**: Look for the Quest Lookout icon
+3. **Start Condor**: Launch your flight simulation
+4. **Fly with awareness**: Perform lookouts when prompted
+
+## ⚙️ How It Works
+
+- **Automatic Activation**: Only monitors during active Condor flights
+- **Head Tracking**: Uses Oculus SDK to monitor your actual head position
+- **Smart Alerts**: When you start looking around, alarms pause to let you complete the scan
+- **Multiple Sensitivity Levels**: Configure different alarms for various flight scenarios
+- **Background Operation**: Runs silently in system tray
+
+## 🔧 Configuration
+
+**Easy GUI Setup** (Recommended):
+- Run `settings_manager.bat` for point-and-click configuration
+- Hover over any setting for detailed tooltips
+- Add/remove/duplicate alarms as needed
+
+**Manual Setup** (Advanced):
+- Edit `settings.json` directly for fine-tuned control
+- Full documentation included in the file
+
+## 📁 What's Included
+
+| File | Purpose |
+|------|---------|
+| `lookout.exe` | Main VR safety monitor |
+| `settings_gui.exe` | Configuration tool (no Python required) |
+| `settings_manager.bat` | Easy launcher for GUI |
+| `setup.bat` | First-time setup assistant |
+| `settings_default.json` | Default configuration template |
+| Audio files (`.ogg`, `.wav`) | Alarm sound files |
+
+## 🆘 Troubleshooting
+
+**Quest Lookout won't start:**
+- Ensure Oculus/Meta software is installed and running
+- Check that `settings.json` exists (run `setup.bat` if missing)
+
+**No alarms during flight:**
+- Verify Condor log path in settings matches your installation
+- Make sure Condor is actually running a simulation (not just menu)
+- Check alarm requirements aren't too restrictive
+
+**Can't configure settings:**
+- Run `settings_manager.bat` to launch the GUI
+- For manual editing, ensure `settings.json` is valid JSON format
 
 ---
 
-For questions, bug reports, or contributions, please open an issue or pull request on GitHub.
+## 🛠️ For Developers
+
+### Building from Source
+
+**Prerequisites:**
+- Windows 10/11
+- Visual Studio 2019+ with C++17 support
+- Oculus SDK
+- SFML 3.x
+- Python 3.7+ (for GUI tool)
+
+**Core Application (C++):**
+```bash
+# Build main VR monitor
+build_improved.bat
+```
+
+**GUI Configuration Tool (Python):**  
+```bash
+# Build standalone GUI executable
+python create_exe.py
+```
+
+**Project Structure:**
+- `lookout.cpp` - Main VR monitoring application
+- `settings_gui.py` - Configuration GUI (builds to .exe)
+- `SFML-3.0.0/` - Audio library (include + lib files)
+- `json.hpp` - JSON parsing library
+
+### Contributing
+
+1. **Fork** the repository
+2. **Create** a feature branch
+3. **Test** with actual VR flight sessions  
+4. **Submit** a pull request
+
+---
+
+**Questions or bug reports?** Open an issue on GitHub.
