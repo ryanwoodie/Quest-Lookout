@@ -1,0 +1,3 @@
+@echo off
+call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+cl /EHsc /Zi /MD /std:c++17 /Fe:lookout.exe lookout.cpp /I. /I"SFML-3.0.0/include" /I"C:\OculusSDK\LibOVR\Include" /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup "C:\OculusSDK\LibOVR\Lib\Windows\x64\Release\VS2017\LibOVR.lib" "SFML-3.0.0/lib/sfml-audio.lib" "SFML-3.0.0/lib/sfml-system.lib" kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib
