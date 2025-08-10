@@ -1,14 +1,14 @@
 # Quest Lookout VR Safety Monitor
 
-**Quest Lookout** is a VR safety tool for flight simulation that helps prevent spatial disorientation and promotes proper traffic scanning habits during VR flights. It monitors your head movements through your Oculus/Meta Quest headset and provides audio reminders when you haven't performed adequate lookout patterns.
+**Quest Lookout** is a VR safety tool for flight simulation that promotes proper traffic scanning habits during VR flights. It monitors your head movements through your Oculus/Meta Quest headset and provides audio reminders when you haven't performed adequate lookout patterns.
 
 ## 🎯 Why Use Quest Lookout?
 
-VR flight simulation can cause **spatial disorientation** and **reduced situational awareness** compared to real flying. Quest Lookout helps maintain:
+VR flight simulation can cause **reduced situational awareness** compared to real flying. Quest Lookout helps maintain:
 - ✈️ **Proper traffic scanning habits** - Regular left/right/up lookout patterns
 - 🚨 **Safety awareness** - Audio alerts when you focus too long in one direction  
 - 🎮 **Real-world skills transfer** - Build habits that work in actual aircraft
-- 👀 **Spatial orientation** - Prevents tunnel vision common in VR
+- 👀 **Visual discipline** - Prevents tunnel vision common in VR
 
 ## 🚀 Quick Start
 
@@ -114,11 +114,6 @@ python create_exe.py
 3. **Test** with actual VR flight sessions  
 4. **Submit** a pull request
 
-**Development Focus Areas:**
-- Additional flight simulator support (X-Plane, MSFS, DCS)
-- Advanced head tracking algorithms  
-- Multi-language support
-- Custom audio generation
 
 ---
 
