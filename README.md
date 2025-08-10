@@ -72,6 +72,11 @@ VR flight simulation can cause **reduced situational awareness** compared to rea
 - Make sure Condor is actually running a simulation (not just menu)
 - Check alarm requirements aren't too restrictive
 
+**Lookout directions seem wrong:**
+- **Important**: Make sure your Quest center matches Condor's view center
+- If you center VR in Condor but it's not aligned with Quest center, you may be looking the wrong way
+- Re-center your Quest headset first, then center the view in Condor to match
+
 **Can't configure settings:**
 - Run `settings_manager.bat` to launch the GUI
 - For manual editing, ensure `settings.json` is valid JSON format
