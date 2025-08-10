@@ -7,11 +7,14 @@ These are the CLI commands you need to create a GitHub release from your local m
 ## 1. Authenticate GitHub CLI (first time only)
 gh auth login
 
-## 2. Package the release files (update filenames/versions as needed)
-powershell Compress-Archive -Path lookout.exe,settings.json,lookout.ogg,notalentassclown.ogg,beep.wav,sfml-audio-3.dll,sfml-system-3.dll,README.md -DestinationPath QuestLookout-v1.0.zip
+## 2. Build the GUI executable first
+python create_exe.py
 
-## 3. Create the GitHub release (creates tag if missing)
-gh release create v1.0 QuestLookout-v1.0.zip --title "Quest Lookout v1.0" --notes "Initial public release"
+## 3. Package the release files (update filenames/versions as needed)
+powershell Compress-Archive -Path lookout.exe,settings_gui.exe,settings.json,settings_default.json,settings_manager.bat,setup.bat,lookout.ogg,notalentassclown.ogg,beep.wav,sfml-audio-3.dll,sfml-system-3.dll,README.md -DestinationPath QuestLookout-v2.0.zip
+
+## 4. Create the GitHub release (creates tag if missing)
+gh release create v2.0 QuestLookout-v2.0.zip --title "Quest Lookout v2.0 - GUI Tools & Performance" --notes "Major update with GUI configuration tool, performance improvements, and enhanced safety features"
 
 ---
 
