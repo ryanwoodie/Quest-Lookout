@@ -6,6 +6,8 @@
 #include <cmath>
 #include <thread>
 #include <chrono>
+#include <ctime>
+#include <sys/stat.h>
 #include <OVR_CAPI.h>
 #include <OVR_CAPI_GL.h>
 
@@ -365,7 +367,24 @@ int app_core_logic()
                     last_relevant_event_type = "LEAVING";
                 }
             }
-            condor_flight_active = (last_relevant_event_type == "ENTERED");
+            
+            // Check file modification time for initial status
+            bool initial_file_is_recent = false;
+            if (last_relevant_event_type == "ENTERED") {
+                struct stat file_stat;
+                if (stat(condor_log_path.c_str(), &file_stat) == 0) {
+                    time_t current_time = time(nullptr);
+                    time_t file_mod_time = file_stat.st_mtime;
+                    double seconds_since_modified = difftime(current_time, file_mod_time);
+                    initial_file_is_recent = (seconds_since_modified <= 300.0);
+                    
+                    if (!initial_file_is_recent) {
+                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but log file is " << (int)(seconds_since_modified/60) << " minutes old. Not starting in active state." << std::endl;
+                    }
+                }
+            }
+            
+            condor_flight_active = (last_relevant_event_type == "ENTERED" && initial_file_is_recent);
             std::cout << "[INFO] Initial Condor flight status: " << (condor_flight_active ? "Active." : "Inactive.") << std::endl;
         } else {
             std::cerr << "[WARNING] Could not open Condor log for initial status check: " << condor_log_path << std::endl;
@@ -464,6 +483,22 @@ int app_core_logic()
 
         if (log_stream) {
             std::streampos current_file_size = log_stream.tellg();
+            
+            // Check file modification time to ensure log is recent
+            struct stat file_stat;
+            bool file_is_recent = false;
+            if (stat(condor_log_path.c_str(), &file_stat) == 0) {
+                time_t current_time = time(nullptr);
+                time_t file_mod_time = file_stat.st_mtime;
+                double seconds_since_modified = difftime(current_time, file_mod_time);
+                // Consider log recent if modified within last 5 minutes (300 seconds)
+                file_is_recent = (seconds_since_modified <= 300.0);
+                
+                if (!file_is_recent && condor_flight_active) {
+                    std::cout << "[INFO] Condor log file is old (last modified " << (int)(seconds_since_modified/60) << " minutes ago). Assuming flight ended." << std::endl;
+                    condor_flight_active = false;
+                }
+            }
 
             if (current_file_size < last_log_pos) { 
                 std::cout << "[INFO] Condor log file truncated/rotated. Resetting scan position." << std::endl;
@@ -498,7 +533,11 @@ int app_core_logic()
 
             if (!latest_event_type_found_in_scan.empty()) {
                 if (latest_event_type_found_in_scan == "ENTERED") {
-                    condor_flight_active = true;
+                    // Only set active if log file is recent
+                    condor_flight_active = file_is_recent;
+                    if (!file_is_recent) {
+                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but log file is old. Not starting flight monitoring." << std::endl;
+                    }
                 } else if (latest_event_type_found_in_scan == "LEAVING") {
                     condor_flight_active = false;
                 }

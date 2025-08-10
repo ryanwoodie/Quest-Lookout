@@ -4,6 +4,7 @@
     "alarms": {
       "description": "Array of alarm configurations with different sensitivities. Each alarm independently monitors head movement patterns and triggers audio warnings when lookout requirements aren't met.",
       "add_remove": "To add alarms: Copy an existing {...} alarm object, paste it after the last alarm, and add a comma between them. To remove: Delete the entire {...} object and any trailing comma.",
+      "example_new_alarm": "{ \"min_horizontal_angle\": 90.0, \"min_vertical_angle_up\": 0, \"min_vertical_angle_down\": 0, \"max_time_ms\": 45000, \"audio_file\": \"custom.ogg\", \"start_volume\": 30, \"end_volume\": 80, \"volume_ramp_time_ms\": 15000, \"repeat_interval_ms\": 10000, \"silence_after_look_ms\": 3000, \"min_lookout_time_ms\": 1500 }",
       "parameters": {
         "min_horizontal_angle": "Total horizontal scan angle required (left + right combined). e.g., 45.0° means 22.5° left AND 22.5° right from VR center. Set to 0 or negative to disable horizontal requirement.",
         "min_vertical_angle_up": "Minimum upward angle from VR center to register an 'up' look (degrees). Set to 0 or negative if upward scanning not required for this alarm.",
@@ -14,7 +15,7 @@
         "end_volume": "Maximum volume the alarm reaches after ramping (0-100). Should be audible over flight sim audio.",
         "volume_ramp_time_ms": "Time for volume to increase from start_volume to end_volume (milliseconds). Set to 0 for immediate full volume.",
         "repeat_interval_ms": "How often alarm repeats if lookout still incomplete (milliseconds). Minimum 100ms. Recommended: 5000-30000.",
-        "silence_after_look_ms": "Duration to silence this alarm after pilot makes any significant head movement (milliseconds). Prevents audio spam during active scanning.",
+        "silence_after_look_ms": "Duration to temporarily silence alarm when pilot starts a new lookout (milliseconds). This gives you time to complete the full scan pattern without annoying audio interruptions. Recommended: 3000-8000ms.",
         "min_lookout_time_ms": "Minimum time required between completing left and right scans for a valid horizontal lookout (milliseconds). Prevents quick head flicks from counting. Recommended: 1000-3000."
       }
     },
@@ -43,7 +44,7 @@
       "min_horizontal_angle": 120.0,
       "min_vertical_angle_up": 10,
       "min_vertical_angle_down": 0,
-      "max_time_ms": 60000,
+      "max_time_ms": 90000,
       "audio_file": "notalentassclown.ogg",
       "start_volume": 50,
       "end_volume": 100,
