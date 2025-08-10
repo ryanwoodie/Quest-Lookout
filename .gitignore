@@ -7,17 +7,52 @@ RELEASE_COMMANDS_PRIVATE.md
 *.ilk
 *.pdb
 *.dll
+*.lib
+*.exp
+*.iobj
+*.ipdb
 !sfml-audio-3.dll
 !sfml-system-3.dll
 
-# Python virtual environments
+# Python virtual environments and packages
 .venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
 
-# VSCode settings (optional, keep if you want to share tasks/settings)
+# PyInstaller build files
+build/
+dist/
+*.spec
+
+# VS Code and IDE settings
 .vscode/
+*.code-workspace
+.vs/
 
-# SFML build directory (if not needed in repo)
-SFML-3.0.0/
+# Visual Studio temporary files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.tmp
+*.temp
+Debug/
+Release/
+x64/
+x86/
+
+# SFML build/temp files (keep development files like include/ and lib/)
+SFML-3.0.0/bin/
+SFML-3.0.0/doc/
+SFML-3.0.0/examples/
+# Keep SFML-3.0.0/include/ and SFML-3.0.0/lib/ for compilation
 
 # Ignore all .wav files except beep.wav
 *.wav
@@ -28,9 +63,28 @@ SFML-3.0.0/
 !lookout.ogg
 !notalentassclown.ogg
 
-# OS/IDE junk
+# OS/IDE junk and thumbnails
 .DS_Store
 Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*~
+*.swp
+*.swo
+
+# Environment and local config files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
 
 # Settings and config (keep for sample)
 !settings.json

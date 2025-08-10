@@ -1,0 +1,10 @@
+CONDOR LOG STARTED AT 4:53:39 PM
+Condor version: 3080
+Creating splash screen.
+Loading cursors.
+Loading fonts.
+Creating controlers.
+Creating client.
+ENTERING SETUP.
+ENTERED SIMULATION AT 5:00:00 PM
+Flying aircraft: ASK-21
