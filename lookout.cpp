@@ -90,20 +90,43 @@ std::vector<LookoutAlarmConfig> load_configs(const std::string& filename) {
 
 sf::Music* get_or_create_sound_player(const std::string& audio_file) {
     std::string file_to_play = audio_file.empty() ? "beep.wav" : audio_file;
+    
+    // Try to create the music object with proper error handling
     auto music = std::make_unique<sf::Music>();
-    if (!music->openFromFile(file_to_play)) {
-        std::cerr << "[ERROR] Could not load music file: " << file_to_play << std::endl;
-        if (file_to_play != "beep.wav") {
-            std::cerr << "[INFO] Attempting to load default beep.wav" << std::endl;
-            if (!music->openFromFile("beep.wav")) {
-                std::cerr << "[ERROR] Could not load default music file: beep.wav" << std::endl;
+    
+    try {
+        // First try the specified file
+        if (!music->openFromFile(file_to_play)) {
+            std::cerr << "[ERROR] Could not load music file: " << file_to_play << std::endl;
+            
+            // If not the default, try beep.wav as fallback
+            if (file_to_play != "beep.wav") {
+                std::cerr << "[INFO] Attempting to load default beep.wav" << std::endl;
+                if (!music->openFromFile("beep.wav")) {
+                    std::cerr << "[ERROR] Could not load default music file: beep.wav" << std::endl;
+                    return nullptr;
+                }
+            } else {
                 return nullptr;
             }
-        } else {
-            return nullptr;
         }
+        
+        // Test if we can actually play the audio (this will catch driver issues)
+        music->setVolume(0); // Silent test
+        music->play();
+        music->stop();
+        
+        std::cout << "[INFO] Successfully loaded and tested audio file: " << file_to_play << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] Exception in audio system: " << e.what() << std::endl;
+        return nullptr;
+    } catch (...) {
+        std::cerr << "[ERROR] Unknown exception in audio system" << std::endl;
+        return nullptr;
     }
-    // sf::Music must persist for the duration of playback, so we leak on purpose for alarm lifetime
+    
+    // Return properly managed resource - no intentional leak
     return music.release();
 }
 
@@ -748,17 +771,32 @@ int app_core_logic()
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout direction flags reset as warning triggers." << std::endl;
                     
                     if(state.sound_player) { 
-                        state.sound_player->stop();
+                        try {
+                            state.sound_player->stop();
+                        } catch (...) {
+                            std::cerr << "[WARNING] Exception stopping previous sound player" << std::endl;
+                        }
                         delete state.sound_player; 
                         state.sound_player = nullptr;
                     }
+                    
                     state.sound_player = get_or_create_sound_player(config.audio_file);
 
                     if (state.sound_player) {
-                        int cur_volume = config.start_volume;
-                        state.sound_player->setVolume(static_cast<float>(cur_volume));
-                        state.sound_player->play();
-                        std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! Vol: " << cur_volume << std::endl;
+                        try {
+                            int cur_volume = config.start_volume;
+                            state.sound_player->setVolume(static_cast<float>(cur_volume));
+                            state.sound_player->play();
+                            std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! Vol: " << cur_volume << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "[ERROR] Alarm " << i << ": Exception playing audio: " << e.what() << std::endl;
+                            delete state.sound_player;
+                            state.sound_player = nullptr;
+                        } catch (...) {
+                            std::cerr << "[ERROR] Alarm " << i << ": Unknown exception playing audio" << std::endl;
+                            delete state.sound_player;
+                            state.sound_player = nullptr;
+                        }
                     } else {
                         std::cerr << "[ERROR] Alarm " << i << ": Failed to create sound player for warning." << std::endl;
                     }
