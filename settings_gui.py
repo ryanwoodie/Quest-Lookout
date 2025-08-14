@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
 import os
+import winreg
+import sys
 
 class ToolTip:
     """Simple tooltip implementation for tkinter widgets"""
@@ -47,6 +49,63 @@ class ToolTip:
 def add_tooltip(widget, text):
     """Helper function to add tooltip to a widget"""
     ToolTip(widget, text)
+
+class StartupManager:
+    """Manages Windows startup registry entries for Quest Lookout"""
+    
+    @staticmethod
+    def get_startup_registry_key():
+        """Get the Windows startup registry key"""
+        return winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"
+    
+    @staticmethod
+    def is_startup_enabled():
+        """Check if Quest Lookout is set to start with Windows"""
+        try:
+            hkey, key_path = StartupManager.get_startup_registry_key()
+            with winreg.OpenKey(hkey, key_path, 0, winreg.KEY_READ) as key:
+                try:
+                    winreg.QueryValueEx(key, "Quest Lookout")
+                    return True
+                except FileNotFoundError:
+                    return False
+        except Exception:
+            return False
+    
+    @staticmethod
+    def enable_startup():
+        """Enable Quest Lookout to start with Windows"""
+        try:
+            # Get the path to the current executable
+            if getattr(sys, 'frozen', False):
+                # If running as exe (compiled with PyInstaller)
+                exe_path = sys.executable
+            else:
+                # If running as Python script, we need to launch the exe
+                exe_path = os.path.join(os.getcwd(), "lookout.exe")
+                if not os.path.exists(exe_path):
+                    raise FileNotFoundError("lookout.exe not found. Please build the application first.")
+            
+            hkey, key_path = StartupManager.get_startup_registry_key()
+            with winreg.OpenKey(hkey, key_path, 0, winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, "Quest Lookout", 0, winreg.REG_SZ, f'"{exe_path}"')
+            return True
+        except Exception as e:
+            raise Exception(f"Failed to enable startup: {e}")
+    
+    @staticmethod
+    def disable_startup():
+        """Disable Quest Lookout from starting with Windows"""
+        try:
+            hkey, key_path = StartupManager.get_startup_registry_key()
+            with winreg.OpenKey(hkey, key_path, 0, winreg.KEY_WRITE) as key:
+                try:
+                    winreg.DeleteValue(key, "Quest Lookout")
+                except FileNotFoundError:
+                    pass  # Already not in startup
+            return True
+        except Exception as e:
+            raise Exception(f"Failed to disable startup: {e}")
 
 class AlarmConfig:
     def __init__(self, data=None):
@@ -263,7 +322,8 @@ class QuestLookoutGUI:
         self.settings = {
             'alarms': [],
             'center_reset': {'window_degrees': 10.0, 'hold_time_seconds': 4.0},
-            'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt'
+            'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt',
+            'start_with_windows': False
         }
         
         self.create_widgets()
@@ -322,6 +382,17 @@ class QuestLookoutGUI:
         ttk.Label(reset_frame, text="Hold Time (seconds):").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.reset_hold_var = tk.StringVar()
         ttk.Entry(reset_frame, textvariable=self.reset_hold_var, width=8).grid(row=1, column=1, padx=5)
+        
+        # Startup settings
+        startup_frame = ttk.LabelFrame(right_frame, text="Windows Startup", padding=10)
+        startup_frame.pack(fill=tk.X, pady=5)
+        
+        self.startup_var = tk.BooleanVar()
+        startup_check = ttk.Checkbutton(startup_frame, text="Start with Windows", 
+                                       variable=self.startup_var, 
+                                       command=self.toggle_startup)
+        startup_check.pack(anchor=tk.W)
+        add_tooltip(startup_check, "When enabled, Quest Lookout will automatically start when Windows boots.\nUses Windows registry to add/remove startup entry.\nRequires lookout.exe to be built and present in the folder.")
         
         # Condor integration
         condor_frame = ttk.LabelFrame(right_frame, text="Condor Integration", padding=10)
@@ -423,6 +494,49 @@ class QuestLookoutGUI:
         if filename:
             self.condor_path_var.set(filename)
     
+    def toggle_startup(self):
+        """Toggle Windows startup setting and save to JSON"""
+        try:
+            startup_enabled = self.startup_var.get()
+            
+            # Update registry
+            if startup_enabled:
+                StartupManager.enable_startup()
+            else:
+                StartupManager.disable_startup()
+            
+            # Update JSON setting
+            self.settings['start_with_windows'] = startup_enabled
+            
+            # Auto-save settings
+            self.save_settings_silent()
+            
+            if startup_enabled:
+                messagebox.showinfo("Success", "Quest Lookout will now start with Windows.\n\nSetting saved to settings.json and Windows registry.")
+            else:
+                messagebox.showinfo("Success", "Quest Lookout will no longer start with Windows.\n\nSetting saved to settings.json and removed from Windows registry.")
+                
+        except Exception as e:
+            # Revert the checkbox state if operation failed
+            self.startup_var.set(not self.startup_var.get())
+            messagebox.showerror("Error", f"Failed to change startup setting:\n\n{e}")
+    
+    def save_settings_silent(self):
+        """Save settings without showing success message"""
+        try:
+            # Update settings from UI
+            self.settings['center_reset']['window_degrees'] = float(self.reset_window_var.get())
+            self.settings['center_reset']['hold_time_seconds'] = float(self.reset_hold_var.get())
+            self.settings['condor_log_path'] = self.condor_path_var.get()
+            
+            with open('settings.json', 'w') as f:
+                json.dump(self.settings, f, indent=2)
+            
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to save settings: {e}")
+            return False
+    
     def load_settings(self):
         try:
             if os.path.exists('settings.json'):
@@ -437,6 +551,26 @@ class QuestLookoutGUI:
                 self.reset_window_var.set(str(self.settings['center_reset']['window_degrees']))
                 self.reset_hold_var.set(str(self.settings['center_reset']['hold_time_seconds']))
                 self.condor_path_var.set(self.settings['condor_log_path'])
+                
+                # Load startup setting from JSON and sync with registry
+                json_startup_setting = self.settings.get('start_with_windows', False)
+                registry_startup_enabled = StartupManager.is_startup_enabled()
+                
+                # If JSON and registry are out of sync, make registry match JSON
+                if json_startup_setting != registry_startup_enabled:
+                    try:
+                        if json_startup_setting:
+                            StartupManager.enable_startup()
+                            print(f"[INFO] Synced startup setting: enabled startup to match settings.json")
+                        else:
+                            StartupManager.disable_startup()
+                            print(f"[INFO] Synced startup setting: disabled startup to match settings.json")
+                    except Exception as e:
+                        print(f"[WARNING] Could not sync startup setting: {e}")
+                        # If registry sync fails, use registry state as truth
+                        json_startup_setting = registry_startup_enabled
+                
+                self.startup_var.set(json_startup_setting)
                 
                 messagebox.showinfo("Success", "Settings loaded successfully!")
             else:
@@ -465,6 +599,8 @@ class QuestLookoutGUI:
                                      "Using built-in defaults.\n\n"
                                      "Save your settings to create the file.")
                 self.reset_defaults()
+                # Sync startup setting when using defaults
+                self.startup_var.set(self.settings.get('start_with_windows', False))
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load settings:\n{e}")
     
@@ -490,13 +626,22 @@ class QuestLookoutGUI:
                     AlarmConfig({'min_horizontal_angle': 120.0, 'max_time_ms': 90000, 'audio_file': 'notalentassclown.ogg'}).to_dict()
                 ],
                 'center_reset': {'window_degrees': 10.0, 'hold_time_seconds': 4.0},
-                'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt'
+                'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt',
+                'start_with_windows': False
             }
             
             self.update_alarms_list()
             self.reset_window_var.set('10.0')
             self.reset_hold_var.set('4.0')
             self.condor_path_var.set('C:\\Condor3\\Logs\\Logfile.txt')
+            
+            # Reset startup setting to false and sync with registry
+            self.startup_var.set(False)
+            try:
+                StartupManager.disable_startup()
+                print("[INFO] Reset: disabled startup to match defaults")
+            except Exception as e:
+                print(f"[WARNING] Could not sync startup setting during reset: {e}")
             
             messagebox.showinfo("Reset Complete", "Settings reset to defaults.")
     

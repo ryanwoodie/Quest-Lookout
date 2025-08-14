@@ -22,6 +22,7 @@
 #include <SFML/Audio.hpp>
 #include <windows.h>
 #include <shellapi.h> // For Shell_NotifyIcon
+#include <tlhelp32.h>  // For process enumeration
 #include <thread>       // For std::thread
 #include <cstdio>       // For _wfreopen_s, FILE 
 #include <SFML/System/Time.hpp>
@@ -32,8 +33,14 @@
 #include <vector>
 // #include <deque> // No longer needed for yaw_window, pitch_window
 #include <algorithm>
-#include <iomanip> 
+#include <iomanip>
+#include <cctype> 
 
+// Forward declarations for startup management
+bool is_startup_enabled_in_registry();
+bool enable_startup_in_registry();
+bool disable_startup_in_registry();
+void sync_startup_setting_from_json();
 
 struct LookoutAlarmConfig {
     double min_horizontal_angle = 120.0; 
@@ -88,22 +95,165 @@ std::vector<LookoutAlarmConfig> load_configs(const std::string& filename) {
     return cfgs;
 }
 
+bool is_startup_enabled_in_registry() {
+    HKEY hkey = HKEY_CURRENT_USER;
+    const char* key_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    
+    HKEY reg_key;
+    if (RegOpenKeyExA(hkey, key_path, 0, KEY_READ, &reg_key) != ERROR_SUCCESS) {
+        return false;
+    }
+    
+    DWORD value_type;
+    DWORD data_size = 0;
+    LONG result = RegQueryValueExA(reg_key, "Quest Lookout", nullptr, &value_type, nullptr, &data_size);
+    RegCloseKey(reg_key);
+    
+    return (result == ERROR_SUCCESS);
+}
+
+bool enable_startup_in_registry() {
+    HKEY hkey = HKEY_CURRENT_USER;
+    const char* key_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    
+    HKEY reg_key;
+    if (RegOpenKeyExA(hkey, key_path, 0, KEY_WRITE, &reg_key) != ERROR_SUCCESS) {
+        return false;
+    }
+    
+    // Get current executable path
+    char exe_path[MAX_PATH];
+    GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+    
+    // Create quoted path string
+    std::string quoted_path = "\"" + std::string(exe_path) + "\"";
+    
+    LONG result = RegSetValueExA(reg_key, "Quest Lookout", 0, REG_SZ, 
+                                (const BYTE*)quoted_path.c_str(), quoted_path.length() + 1);
+    RegCloseKey(reg_key);
+    
+    return (result == ERROR_SUCCESS);
+}
+
+bool disable_startup_in_registry() {
+    HKEY hkey = HKEY_CURRENT_USER;
+    const char* key_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    
+    HKEY reg_key;
+    if (RegOpenKeyExA(hkey, key_path, 0, KEY_WRITE, &reg_key) != ERROR_SUCCESS) {
+        return false;
+    }
+    
+    LONG result = RegDeleteValueA(reg_key, "Quest Lookout");
+    RegCloseKey(reg_key);
+    
+    return (result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND);
+}
+
+void sync_startup_setting_from_json() {
+    std::ifstream f("settings.json");
+    if (!f) {
+        std::cout << "[INFO] No settings.json found for startup sync." << std::endl;
+        return;
+    }
+    
+    try {
+        nlohmann::json j;
+        f >> j;
+        
+        bool json_startup_setting = j.value("start_with_windows", false);
+        bool registry_startup_enabled = is_startup_enabled_in_registry();
+        
+        // If JSON and registry are out of sync, make registry match JSON
+        if (json_startup_setting != registry_startup_enabled) {
+            if (json_startup_setting) {
+                if (enable_startup_in_registry()) {
+                    std::cout << "[INFO] Enabled Windows startup to match settings.json" << std::endl;
+                } else {
+                    std::cout << "[WARNING] Failed to enable Windows startup" << std::endl;
+                }
+            } else {
+                if (disable_startup_in_registry()) {
+                    std::cout << "[INFO] Disabled Windows startup to match settings.json" << std::endl;
+                } else {
+                    std::cout << "[WARNING] Failed to disable Windows startup" << std::endl;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cout << "[WARNING] Could not parse startup setting from settings.json: " << e.what() << std::endl;
+    }
+}
+
+bool is_condor_process_running() {
+    HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hProcessSnap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    
+    PROCESSENTRY32 pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    
+    if (!Process32First(hProcessSnap, &pe32)) {
+        CloseHandle(hProcessSnap);
+        return false;
+    }
+    
+    bool condor_found = false;
+    do {
+        // Check for Condor.exe (case insensitive)
+        std::string processName = pe32.szExeFile;
+        std::transform(processName.begin(), processName.end(), processName.begin(), ::tolower);
+        
+        if (processName == "condor.exe" || processName == "condor3.exe") {
+            condor_found = true;
+            break;
+        }
+    } while (Process32Next(hProcessSnap, &pe32));
+    
+    CloseHandle(hProcessSnap);
+    return condor_found;
+}
+
 sf::Music* get_or_create_sound_player(const std::string& audio_file) {
     std::string file_to_play = audio_file.empty() ? "beep.wav" : audio_file;
+    
+    // Try to create the music object with proper error handling
     auto music = std::make_unique<sf::Music>();
-    if (!music->openFromFile(file_to_play)) {
-        std::cerr << "[ERROR] Could not load music file: " << file_to_play << std::endl;
-        if (file_to_play != "beep.wav") {
-            std::cerr << "[INFO] Attempting to load default beep.wav" << std::endl;
-            if (!music->openFromFile("beep.wav")) {
-                std::cerr << "[ERROR] Could not load default music file: beep.wav" << std::endl;
+    
+    try {
+        // First try the specified file
+        if (!music->openFromFile(file_to_play)) {
+            std::cerr << "[ERROR] Could not load music file: " << file_to_play << std::endl;
+            
+            // If not the default, try beep.wav as fallback
+            if (file_to_play != "beep.wav") {
+                std::cerr << "[INFO] Attempting to load default beep.wav" << std::endl;
+                if (!music->openFromFile("beep.wav")) {
+                    std::cerr << "[ERROR] Could not load default music file: beep.wav" << std::endl;
+                    return nullptr;
+                }
+            } else {
                 return nullptr;
             }
-        } else {
-            return nullptr;
         }
+        
+        // Test if we can actually play the audio (this will catch driver issues)
+        music->setVolume(0); // Silent test
+        music->play();
+        music->stop();
+        
+        std::cout << "[INFO] Successfully loaded and tested audio file: " << file_to_play << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "[ERROR] Exception in audio system: " << e.what() << std::endl;
+        return nullptr;
+    } catch (...) {
+        std::cerr << "[ERROR] Unknown exception in audio system" << std::endl;
+        return nullptr;
     }
-    // sf::Music must persist for the duration of playback, so we leak on purpose for alarm lifetime
+    
+    // Return properly managed resource - no intentional leak
     return music.release();
 }
 
@@ -295,35 +445,77 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 int app_core_logic() 
 {
-    ovrInitParams initParams = {0};
-    initParams.Flags = ovrInit_Invisible; 
-    initParams.RequestedMinorVersion = OVR_MINOR_VERSION; 
+    std::cout << "[INFO] Quest Lookout starting - waiting for Oculus HMD connection..." << std::endl;
+    
+    ovrSession session = nullptr;
+    bool ovr_initialized = false;
+    int retry_count = 0;
+    const int max_retries = -1; // Infinite retries
+    const int retry_delay_ms = 3000; // 3 seconds between retries
+    
+    // Keep trying to initialize until successful or window closed
+    while (IsWindow(g_hwnd)) {
+        if (!ovr_initialized) {
+            ovrInitParams initParams = {0};
+            initParams.Flags = ovrInit_Invisible; 
+            initParams.RequestedMinorVersion = OVR_MINOR_VERSION; 
 
-    ovrResult result = ovr_Initialize(&initParams);
-    if (OVR_FAILURE(result)) {
-        ovrErrorInfo errorInfo;
-        ovr_GetLastErrorInfo(&errorInfo);
-        std::cerr << "[ERROR] OVR Init Fail (with ovrInit_Invisible): " << errorInfo.ErrorString << std::endl;
-        MessageBoxA(NULL, ("OVR Init Fail: " + std::string(errorInfo.ErrorString)).c_str(), "Oculus Error", MB_OK | MB_ICONERROR);
-        return 1; 
+            ovrResult result = ovr_Initialize(&initParams);
+            if (OVR_FAILURE(result)) {
+                retry_count++;
+                ovrErrorInfo errorInfo;
+                ovr_GetLastErrorInfo(&errorInfo);
+                if (retry_count == 1) {
+                    std::cout << "[INFO] Waiting for Oculus service to start..." << std::endl;
+                } else if (retry_count % 10 == 0) { // Every 30 seconds
+                    std::cout << "[INFO] Still waiting for Oculus HMD (attempt " << retry_count << ")..." << std::endl;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+                continue;
+            }
+            
+            ovr_initialized = true;
+            std::cout << "[INFO] OVR Initialized with ovrInit_Invisible flag." << std::endl;
+        }
+        
+        // Try to create session
+        ovrGraphicsLuid luid;
+        ovrResult result = ovr_Create(&session, &luid);
+        if (OVR_FAILURE(result)) {
+            retry_count++;
+            ovrErrorInfo errorInfo;
+            ovr_GetLastErrorInfo(&errorInfo);
+            
+            if (retry_count == 1) {
+                std::cout << "[INFO] Waiting for Oculus HMD to be connected and ready..." << std::endl;
+            } else if (retry_count % 10 == 0) { // Every 30 seconds
+                std::cout << "[INFO] Still waiting for HMD connection (attempt " << retry_count << ")..." << std::endl;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+            continue;
+        }
+        
+        // Success!
+        std::cout << "[INFO] OVR Session Created - HMD connected and ready!" << std::endl;
+        break;
     }
-    std::cout << "[INFO] OVR Initialized with ovrInit_Invisible flag." << std::endl;
-
-    ovrSession session;
-    ovrGraphicsLuid luid; 
-    result = ovr_Create(&session, &luid);
-    if (OVR_FAILURE(result)) {
-        ovrErrorInfo errorInfo;
-        ovr_GetLastErrorInfo(&errorInfo);
-        std::cerr << "[ERROR] OVR Create Fail: " << errorInfo.ErrorString << std::endl;
-        MessageBoxA(NULL, ("OVR Create Fail: " + std::string(errorInfo.ErrorString)).c_str(), "Oculus Error", MB_OK | MB_ICONERROR);
-        ovr_Shutdown();
-        return 1;
+    
+    // Check if we exited because window was closed
+    if (!IsWindow(g_hwnd)) {
+        std::cout << "[INFO] Application closing during HMD initialization." << std::endl;
+        if (ovr_initialized) {
+            ovr_Shutdown();
+        }
+        return 0;
     }
-    std::cout << "[INFO] OVR Session Created." << std::endl;
 
 
     std::vector<LookoutAlarmConfig> alarms = load_configs("settings.json");
+    
+    // Sync Windows startup setting with settings.json
+    sync_startup_setting_from_json();
+    
     if (alarms.empty()) { 
         std::cerr << "[ERROR] No Alarms Loaded from settings.json. Exiting." << std::endl; 
         if (IsWindow(g_hwnd)) PostMessage(g_hwnd, WM_COMMAND, ID_TRAY_EXIT_CONTEXT_MENU_ITEM, 0); // Try to exit cleanly
@@ -368,23 +560,17 @@ int app_core_logic()
                 }
             }
             
-            // Check file modification time for initial status
-            bool initial_file_is_recent = false;
-            if (last_relevant_event_type == "ENTERED") {
-                struct stat file_stat;
-                if (stat(condor_log_path.c_str(), &file_stat) == 0) {
-                    time_t current_time = time(nullptr);
-                    time_t file_mod_time = file_stat.st_mtime;
-                    double seconds_since_modified = difftime(current_time, file_mod_time);
-                    initial_file_is_recent = (seconds_since_modified <= 300.0);
-                    
-                    if (!initial_file_is_recent) {
-                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but log file is " << (int)(seconds_since_modified/60) << " minutes old. Not starting in active state." << std::endl;
-                    }
-                }
-            }
+            // Check if Condor process is running and log shows flight active
+            bool condor_process_running = is_condor_process_running();
+            bool log_shows_flight_active = (last_relevant_event_type == "ENTERED");
             
-            condor_flight_active = (last_relevant_event_type == "ENTERED" && initial_file_is_recent);
+            condor_flight_active = (condor_process_running && log_shows_flight_active);
+            
+            if (log_shows_flight_active && !condor_process_running) {
+                std::cout << "[INFO] Log shows 'ENTERED SIMULATION' but Condor process not running. Not starting in active state." << std::endl;
+            } else if (!log_shows_flight_active && condor_process_running) {
+                std::cout << "[INFO] Condor process running but no active flight in log. Not starting in active state." << std::endl;
+            }
             std::cout << "[INFO] Initial Condor flight status: " << (condor_flight_active ? "Active." : "Inactive.") << std::endl;
         } else {
             std::cerr << "[WARNING] Could not open Condor log for initial status check: " << condor_log_path << std::endl;
@@ -484,20 +670,12 @@ int app_core_logic()
         if (log_stream) {
             std::streampos current_file_size = log_stream.tellg();
             
-            // Check file modification time to ensure log is recent
-            struct stat file_stat;
-            bool file_is_recent = false;
-            if (stat(condor_log_path.c_str(), &file_stat) == 0) {
-                time_t current_time = time(nullptr);
-                time_t file_mod_time = file_stat.st_mtime;
-                double seconds_since_modified = difftime(current_time, file_mod_time);
-                // Consider log recent if modified within last 5 minutes (300 seconds)
-                file_is_recent = (seconds_since_modified <= 300.0);
-                
-                if (!file_is_recent && condor_flight_active) {
-                    std::cout << "[INFO] Condor log file is old (last modified " << (int)(seconds_since_modified/60) << " minutes ago). Assuming flight ended." << std::endl;
-                    condor_flight_active = false;
-                }
+            // Check if Condor process is still running
+            bool condor_process_running = is_condor_process_running();
+            
+            if (!condor_process_running && condor_flight_active) {
+                std::cout << "[INFO] Condor process no longer running. Assuming flight ended." << std::endl;
+                condor_flight_active = false;
             }
 
             if (current_file_size < last_log_pos) { 
@@ -533,10 +711,10 @@ int app_core_logic()
 
             if (!latest_event_type_found_in_scan.empty()) {
                 if (latest_event_type_found_in_scan == "ENTERED") {
-                    // Only set active if log file is recent
-                    condor_flight_active = file_is_recent;
-                    if (!file_is_recent) {
-                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but log file is old. Not starting flight monitoring." << std::endl;
+                    // Set active if both process running and log shows ENTERED
+                    condor_flight_active = condor_process_running;
+                    if (!condor_process_running) {
+                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but Condor process not running. Not starting flight monitoring." << std::endl;
                     }
                 } else if (latest_event_type_found_in_scan == "LEAVING") {
                     condor_flight_active = false;
@@ -587,7 +765,40 @@ int app_core_logic()
         double displayTime = ovr_GetPredictedDisplayTime(session, 0);
         ovrTrackingState ts = ovr_GetTrackingState(session, displayTime, ovrTrue);
         ovrSessionStatus sessionStatus;
-        ovr_GetSessionStatus(session, &sessionStatus);
+        ovrResult session_status_result = ovr_GetSessionStatus(session, &sessionStatus);
+        
+        // Check if session became invalid (HMD disconnected)
+        if (OVR_FAILURE(session_status_result) || !sessionStatus.IsVisible) {
+            std::cout << "[WARNING] HMD session lost. Attempting to reconnect..." << std::endl;
+            
+            // Try to recreate the session
+            ovr_Destroy(session);
+            ovrGraphicsLuid luid;
+            ovrResult recreate_result = ovr_Create(&session, &luid);
+            
+            if (OVR_FAILURE(recreate_result)) {
+                std::cout << "[INFO] HMD disconnected. Waiting for reconnection..." << std::endl;
+                // Reset state and wait for HMD to come back
+                for (AlarmState& s : alarm_states) {
+                    if (s.sound_player && s.sound_player->getStatus() == sf::SoundSource::Status::Playing) {
+                        s.sound_player->stop();
+                    }
+                    s.warning_triggered = false;
+                    s.noLookTime_ms = 0.0;
+                    s.repeat_timer_ms = 0.0;
+                }
+                
+                // Wait and retry session creation
+                std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+                continue;
+            } else {
+                std::cout << "[INFO] HMD session restored successfully!" << std::endl;
+                // Re-get the tracking data with new session
+                displayTime = ovr_GetPredictedDisplayTime(session, 0);
+                ts = ovr_GetTrackingState(session, displayTime, ovrTrue);
+                ovr_GetSessionStatus(session, &sessionStatus);
+            }
+        }
 
         static bool hmd_status_ok_previously = true; 
         bool hmd_currently_ok = (ts.StatusFlags & ovrStatus_OrientationTracked) &&
@@ -748,17 +959,32 @@ int app_core_logic()
                     std::cout << "[DEBUG] Alarm " << i << ": Lookout direction flags reset as warning triggers." << std::endl;
                     
                     if(state.sound_player) { 
-                        state.sound_player->stop();
+                        try {
+                            state.sound_player->stop();
+                        } catch (...) {
+                            std::cerr << "[WARNING] Exception stopping previous sound player" << std::endl;
+                        }
                         delete state.sound_player; 
                         state.sound_player = nullptr;
                     }
+                    
                     state.sound_player = get_or_create_sound_player(config.audio_file);
 
                     if (state.sound_player) {
-                        int cur_volume = config.start_volume;
-                        state.sound_player->setVolume(static_cast<float>(cur_volume));
-                        state.sound_player->play();
-                        std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! Vol: " << cur_volume << std::endl;
+                        try {
+                            int cur_volume = config.start_volume;
+                            state.sound_player->setVolume(static_cast<float>(cur_volume));
+                            state.sound_player->play();
+                            std::cout << "[WARNING] Alarm " << i << ": Please perform a visual lookout! Vol: " << cur_volume << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "[ERROR] Alarm " << i << ": Exception playing audio: " << e.what() << std::endl;
+                            delete state.sound_player;
+                            state.sound_player = nullptr;
+                        } catch (...) {
+                            std::cerr << "[ERROR] Alarm " << i << ": Unknown exception playing audio" << std::endl;
+                            delete state.sound_player;
+                            state.sound_player = nullptr;
+                        }
                     } else {
                         std::cerr << "[ERROR] Alarm " << i << ": Failed to create sound player for warning." << std::endl;
                     }

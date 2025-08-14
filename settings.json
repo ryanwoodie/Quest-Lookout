@@ -1,30 +1,4 @@
 {
-  "_instructions": {
-    "overview": "Quest Lookout VR Safety Monitor Configuration",
-    "alarms": {
-      "description": "Array of alarm configurations with different sensitivities. Each alarm independently monitors head movement patterns and triggers audio warnings when lookout requirements aren't met.",
-      "add_remove": "To add alarms: Copy an existing {...} alarm object, paste it after the last alarm, and add a comma between them. To remove: Delete the entire {...} object and any trailing comma.",
-      "parameters": {
-        "min_horizontal_angle": "Total horizontal scan angle required (left + right combined). e.g., 45.0° means 22.5° left AND 22.5° right from VR center. Set to 0 or negative to disable horizontal requirement.",
-        "min_vertical_angle_up": "Minimum upward angle from VR center to register an 'up' look (degrees). Set to 0 or negative if upward scanning not required for this alarm.",
-        "min_vertical_angle_down": "Minimum downward angle from VR center to register a 'down' look (positive degrees). e.g., 5.0 means looking down 5°. Set to 0 or negative if not required.",
-        "max_time_ms": "Maximum time (milliseconds) allowed without completing ALL required lookout directions before this alarm triggers. Recommended: 30000-90000 (30-90 seconds).",
-        "audio_file": "Path to audio file (.ogg, .wav, etc.) for this specific alarm. Uses 'beep.wav' as fallback if file not found or empty string.",
-        "start_volume": "Initial volume when alarm first sounds (0-100). Allows gentle start before ramping up.",
-        "end_volume": "Maximum volume the alarm reaches after ramping (0-100). Should be audible over flight sim audio.",
-        "volume_ramp_time_ms": "Time for volume to increase from start_volume to end_volume (milliseconds). Set to 0 for immediate full volume.",
-        "repeat_interval_ms": "How often alarm repeats if lookout still incomplete (milliseconds). Minimum 100ms. Recommended: 5000-30000.",
-        "silence_after_look_ms": "Duration to silence this alarm after pilot makes any significant head movement (milliseconds). Prevents audio spam during active scanning.",
-        "min_lookout_time_ms": "Minimum time required between completing left and right scans for a valid horizontal lookout (milliseconds). Prevents quick head flicks from counting. Recommended: 1000-3000."
-      }
-    },
-    "center_reset": {
-      "description": "Automatically resets ALL lookout progress flags when pilot looks straight ahead for specified duration. Prevents partial/stale lookouts from staying 'satisfied' indefinitely.",
-      "window_degrees": "Angular tolerance around straight-ahead (degrees). Pilot must keep head within ±this angle from VR center.",
-      "hold_time_seconds": "Duration to look straight ahead before reset triggers (seconds). Should be long enough to be intentional but not annoying."
-    },
-    "condor_log_path": "Full Windows path to Condor flight simulator log file (typically 'Logfile.txt'). Enables automatic flight detection - alarms only active during actual flights. Use forward slashes or escaped backslashes."
-  },
   "alarms": [
     {
       "min_horizontal_angle": 45.0,
@@ -54,8 +28,9 @@
     }
   ],
   "center_reset": {
-    "window_degrees": 10,
-    "hold_time_seconds": 4
+    "window_degrees": 10.0,
+    "hold_time_seconds": 4.0
   },
-  "condor_log_path": "C:\\Condor3\\Logs\\Logfile.txt"
+  "condor_log_path": "C:\\Condor3\\Logs\\Logfile.txt",
+  "start_with_windows": true
 }
