@@ -31,6 +31,6 @@
     "window_degrees": 10.0,
     "hold_time_seconds": 4.0
   },
-  "condor_log_path": "C:\\Condor3\\Logs\\Logfile.txt",
-  "start_with_windows": true
+  "start_with_windows": true,
+  "recenter_hotkey": "Ctrl+Shift+5"
 }

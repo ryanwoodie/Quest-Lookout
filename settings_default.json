@@ -24,8 +24,8 @@
       "window_degrees": "Angular tolerance around straight-ahead (degrees). Pilot must keep head within ±this angle from VR center.",
       "hold_time_seconds": "Duration to look straight ahead before reset triggers (seconds). Should be long enough to be intentional but not annoying."
     },
-    "condor_log_path": "Full Windows path to Condor flight simulator log file (typically 'Logfile.txt'). Enables automatic flight detection - alarms only active during actual flights. Use forward slashes or escaped backslashes.",
-    "start_with_windows": "Boolean setting to control whether Quest Lookout automatically starts when Windows boots. When true, adds registry entry for Windows startup. When false, removes it."
+      "start_with_windows": "Boolean setting to control whether Quest Lookout automatically starts when Windows boots. When true, adds registry entry for Windows startup. When false, removes it.",
+    "recenter_hotkey": "Hotkey to recenter Oculus headset tracking. Default 'Num5' matches Condor's VR view reset key. Recommend using same key as VR view reset in Condor for consistency. Examples: 'Num5', 'F12', 'Ctrl+R', 'Ctrl+Shift+R'."
   },
   "alarms": [
     {
@@ -59,6 +59,6 @@
     "window_degrees": 10,
     "hold_time_seconds": 4
   },
-  "condor_log_path": "C:\\Condor3\\Logs\\Logfile.txt",
-  "start_with_windows": false
+  "start_with_windows": false,
+  "recenter_hotkey": "Num5"
 }

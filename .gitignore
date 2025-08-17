@@ -93,3 +93,6 @@ $RECYCLE.BIN/
 # JSON for code
 !json.hpp
 RELEASE_COMMANDS_PRIVATE.md
+.claude/
+debug_run.bat
+recenter_test.cpp

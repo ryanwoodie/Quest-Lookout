@@ -322,8 +322,8 @@ class QuestLookoutGUI:
         self.settings = {
             'alarms': [],
             'center_reset': {'window_degrees': 10.0, 'hold_time_seconds': 4.0},
-            'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt',
-            'start_with_windows': False
+            'start_with_windows': False,
+            'recenter_hotkey': 'Num5'
         }
         
         self.create_widgets()
@@ -383,6 +383,16 @@ class QuestLookoutGUI:
         self.reset_hold_var = tk.StringVar()
         ttk.Entry(reset_frame, textvariable=self.reset_hold_var, width=8).grid(row=1, column=1, padx=5)
         
+        # Hotkey settings
+        hotkey_frame = ttk.LabelFrame(right_frame, text="Hotkey Settings", padding=10)
+        hotkey_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(hotkey_frame, text="Recenter Hotkey:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.recenter_hotkey_var = tk.StringVar()
+        hotkey_entry = ttk.Entry(hotkey_frame, textvariable=self.recenter_hotkey_var, width=12)
+        hotkey_entry.grid(row=0, column=1, padx=5)
+        add_tooltip(hotkey_entry, "Hotkey to recenter Oculus headset tracking.\\n\\nDefault 'Num5' matches Condor's VR view reset key.\\nRecommend using same key as VR view reset in Condor for consistency.\\n\\nExamples: 'Num5', 'F12', 'Ctrl+R', 'Ctrl+Shift+R'")
+        
         # Startup settings
         startup_frame = ttk.LabelFrame(right_frame, text="Windows Startup", padding=10)
         startup_frame.pack(fill=tk.X, pady=5)
@@ -393,18 +403,6 @@ class QuestLookoutGUI:
                                        command=self.toggle_startup)
         startup_check.pack(anchor=tk.W)
         add_tooltip(startup_check, "When enabled, Quest Lookout will automatically start when Windows boots.\nUses Windows registry to add/remove startup entry.\nRequires lookout.exe to be built and present in the folder.")
-        
-        # Condor integration
-        condor_frame = ttk.LabelFrame(right_frame, text="Condor Integration", padding=10)
-        condor_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(condor_frame, text="Log File Path:").pack(anchor=tk.W)
-        path_frame = ttk.Frame(condor_frame)
-        path_frame.pack(fill=tk.X)
-        
-        self.condor_path_var = tk.StringVar()
-        ttk.Entry(path_frame, textvariable=self.condor_path_var, width=25).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(path_frame, text="Browse...", command=self.browse_condor_log).pack(side=tk.RIGHT, padx=(5,0))
         
         # Action buttons
         action_frame = ttk.LabelFrame(right_frame, text="Actions", padding=10)
@@ -485,14 +483,6 @@ class QuestLookoutGUI:
         self.update_alarms_list()
         messagebox.showinfo("Success", "Alarm duplicated successfully!")
     
-    def browse_condor_log(self):
-        filename = filedialog.askopenfilename(
-            title="Select Condor Log File",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-            initialdir="C:/Condor3/Logs" if os.path.exists("C:/Condor3/Logs") else "C:/"
-        )
-        if filename:
-            self.condor_path_var.set(filename)
     
     def toggle_startup(self):
         """Toggle Windows startup setting and save to JSON"""
@@ -527,7 +517,7 @@ class QuestLookoutGUI:
             # Update settings from UI
             self.settings['center_reset']['window_degrees'] = float(self.reset_window_var.get())
             self.settings['center_reset']['hold_time_seconds'] = float(self.reset_hold_var.get())
-            self.settings['condor_log_path'] = self.condor_path_var.get()
+            self.settings['recenter_hotkey'] = self.recenter_hotkey_var.get()
             
             with open('settings.json', 'w') as f:
                 json.dump(self.settings, f, indent=2)
@@ -550,7 +540,7 @@ class QuestLookoutGUI:
                 self.update_alarms_list()
                 self.reset_window_var.set(str(self.settings['center_reset']['window_degrees']))
                 self.reset_hold_var.set(str(self.settings['center_reset']['hold_time_seconds']))
-                self.condor_path_var.set(self.settings['condor_log_path'])
+                self.recenter_hotkey_var.set(self.settings.get('recenter_hotkey', 'Num5'))
                 
                 # Load startup setting from JSON and sync with registry
                 json_startup_setting = self.settings.get('start_with_windows', False)
@@ -609,7 +599,7 @@ class QuestLookoutGUI:
             # Update settings from UI
             self.settings['center_reset']['window_degrees'] = float(self.reset_window_var.get())
             self.settings['center_reset']['hold_time_seconds'] = float(self.reset_hold_var.get())
-            self.settings['condor_log_path'] = self.condor_path_var.get()
+            self.settings['recenter_hotkey'] = self.recenter_hotkey_var.get()
             
             with open('settings.json', 'w') as f:
                 json.dump(self.settings, f, indent=2)
@@ -626,14 +616,14 @@ class QuestLookoutGUI:
                     AlarmConfig({'min_horizontal_angle': 120.0, 'max_time_ms': 90000, 'audio_file': 'notalentassclown.ogg'}).to_dict()
                 ],
                 'center_reset': {'window_degrees': 10.0, 'hold_time_seconds': 4.0},
-                'condor_log_path': 'C:\\Condor3\\Logs\\Logfile.txt',
-                'start_with_windows': False
+                'start_with_windows': False,
+                'recenter_hotkey': 'Num5'
             }
             
             self.update_alarms_list()
             self.reset_window_var.set('10.0')
             self.reset_hold_var.set('4.0')
-            self.condor_path_var.set('C:\\Condor3\\Logs\\Logfile.txt')
+            self.recenter_hotkey_var.set('Num5')
             
             # Reset startup setting to false and sync with registry
             self.startup_var.set(False)

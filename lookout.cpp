@@ -21,6 +21,7 @@
 #include "json.hpp" 
 #include <SFML/Audio.hpp>
 #include <windows.h>
+#include <winuser.h>   // For VK_ constants and hotkey functions
 #include <shellapi.h> // For Shell_NotifyIcon
 #include <tlhelp32.h>  // For process enumeration
 #include <thread>       // For std::thread
@@ -41,6 +42,30 @@ bool is_startup_enabled_in_registry();
 bool enable_startup_in_registry();
 bool disable_startup_in_registry();
 void sync_startup_setting_from_json();
+
+// Hotkey message ID
+#define WM_HOTKEY_RECENTER 1004
+
+// Forward declarations for hotkey management  
+bool parse_hotkey(const std::string& hotkey_str, UINT& modifiers, UINT& vk_code);
+bool register_recenter_hotkey(HWND hwnd);
+void unregister_recenter_hotkey(HWND hwnd);
+void load_hotkey_from_settings();
+
+// Hotkey globals (declared early for function access)
+std::string g_recenter_hotkey = "Num5";
+bool g_hotkey_registered = false;
+
+// Oculus session global (for hotkey access)
+ovrSession g_ovr_session = nullptr;
+
+// Software recenter flag and offset
+bool g_request_software_recenter = false;
+bool g_request_baseline_reset = false; // Reset baseline reference to current head position
+ovrQuatf g_recenter_offset = {0, 0, 0, 1}; // Identity quaternion
+ovrQuatf g_baseline_reference = {0, 0, 0, 1}; // Baseline reference orientation
+bool g_has_manual_recenter_offset = false; // Track if user has manually set offset
+bool g_has_baseline_reference = false; // Track if we have a custom baseline
 
 struct LookoutAlarmConfig {
     double min_horizontal_angle = 120.0; 
@@ -63,10 +88,54 @@ struct LookoutAlarmConfig {
 
 inline double rad2deg(double rad) { return rad * 180.0 / M_PI; }
 
+// Quaternion multiplication for applying software recenter offset
+ovrQuatf quat_multiply(const ovrQuatf& q1, const ovrQuatf& q2) {
+    ovrQuatf result;
+    result.w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z;
+    result.x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y;
+    result.y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x;
+    result.z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w;
+    return result;
+}
+
+// Clear software recenter offset (reset to identity)  
+void clear_software_recenter() {
+    g_recenter_offset = {0, 0, 0, 1}; // Identity quaternion
+    g_has_manual_recenter_offset = false;
+    std::cout << "[INFO] Software recenter offset cleared" << std::endl;
+}
+
+// Reset baseline reference to current head position
+void reset_baseline_reference() {
+    g_baseline_reference = {0, 0, 0, 1}; // Will be set in main loop
+    g_has_baseline_reference = false; // Will be set to true when captured
+    g_request_baseline_reset = true;
+    clear_software_recenter(); // Also clear any manual offset
+    std::cout << "[INFO] Baseline reference reset requested" << std::endl;
+}
+
+// Quaternion conjugate (inverse rotation)
+ovrQuatf quat_conjugate(const ovrQuatf& q) {
+    return {-q.x, -q.y, -q.z, q.w};
+}
+
 void quat_to_yaw_pitch(const ovrQuatf& q, double& yaw_deg, double& pitch_deg) {
-    double ys = 2.0 * (q.w * q.y + q.x * q.z);
-    double yc = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-    double ps = 2.0 * (q.w * q.x - q.z * q.y);
+    ovrQuatf working_q = q;
+    
+    // Apply baseline reference transformation (if we have one)
+    if (g_has_baseline_reference) {
+        // Transform relative to baseline: q_relative = q_baseline_inverse * q_current
+        working_q = quat_multiply(quat_conjugate(g_baseline_reference), q);
+    }
+    
+    // Apply manual recenter offset (only if user has manually set one)
+    if (g_has_manual_recenter_offset) {
+        working_q = quat_multiply(working_q, g_recenter_offset);
+    }
+    
+    double ys = 2.0 * (working_q.w * working_q.y + working_q.x * working_q.z);
+    double yc = 1.0 - 2.0 * (working_q.y * working_q.y + working_q.z * working_q.z);
+    double ps = 2.0 * (working_q.w * working_q.x - working_q.z * working_q.y);
     ps = (std::max)((-1.0), (std::min)(1.0, ps)); 
     yaw_deg = rad2deg(std::atan2(ys, yc)); // Output is [-180, 180]
     pitch_deg = rad2deg(std::asin(ps));   // Output is [-90, 90]
@@ -185,6 +254,112 @@ void sync_startup_setting_from_json() {
     }
 }
 
+// Hotkey management functions
+bool parse_hotkey(const std::string& hotkey_str, UINT& modifiers, UINT& vk_code) {
+    modifiers = 0;
+    vk_code = 0;
+    
+    std::string key_str = hotkey_str;
+    std::transform(key_str.begin(), key_str.end(), key_str.begin(), ::tolower);
+    
+    // Parse modifiers
+    if (key_str.find("ctrl+") != std::string::npos) {
+        modifiers |= MOD_CONTROL;
+        key_str.erase(key_str.find("ctrl+"), 5);
+    }
+    if (key_str.find("shift+") != std::string::npos) {
+        modifiers |= MOD_SHIFT;
+        key_str.erase(key_str.find("shift+"), 6);
+    }
+    if (key_str.find("alt+") != std::string::npos) {
+        modifiers |= MOD_ALT;
+        key_str.erase(key_str.find("alt+"), 4);
+    }
+    
+    // Parse key codes
+    if (key_str == "num5") vk_code = 0x65;      // VK_NUMPAD5
+    else if (key_str == "num0") vk_code = 0x60; // VK_NUMPAD0
+    else if (key_str == "num1") vk_code = 0x61; // VK_NUMPAD1
+    else if (key_str == "num2") vk_code = 0x62; // VK_NUMPAD2
+    else if (key_str == "num3") vk_code = 0x63; // VK_NUMPAD3
+    else if (key_str == "num4") vk_code = 0x64; // VK_NUMPAD4
+    else if (key_str == "num6") vk_code = 0x66; // VK_NUMPAD6
+    else if (key_str == "num7") vk_code = 0x67; // VK_NUMPAD7
+    else if (key_str == "num8") vk_code = 0x68; // VK_NUMPAD8
+    else if (key_str == "num9") vk_code = 0x69; // VK_NUMPAD9
+    else if (key_str == "f1") vk_code = 0x70;   // VK_F1
+    else if (key_str == "f2") vk_code = 0x71;   // VK_F2
+    else if (key_str == "f3") vk_code = 0x72;   // VK_F3
+    else if (key_str == "f4") vk_code = 0x73;   // VK_F4
+    else if (key_str == "f5") vk_code = 0x74;   // VK_F5
+    else if (key_str == "f6") vk_code = 0x75;   // VK_F6
+    else if (key_str == "f7") vk_code = 0x76;   // VK_F7
+    else if (key_str == "f8") vk_code = 0x77;   // VK_F8
+    else if (key_str == "f9") vk_code = 0x78;   // VK_F9
+    else if (key_str == "f10") vk_code = 0x79;  // VK_F10
+    else if (key_str == "f11") vk_code = 0x7A;  // VK_F11
+    else if (key_str == "f12") vk_code = 0x7B;  // VK_F12
+    else if (key_str.length() == 1) {
+        char c = key_str[0];
+        if (c >= 'a' && c <= 'z') vk_code = 0x41 + (c - 'a');  // VK_A = 0x41
+        else if (c >= '0' && c <= '9') vk_code = 0x30 + (c - '0');  // VK_0 = 0x30
+        else return false;
+    } else {
+        return false;
+    }
+    
+    return vk_code != 0;
+}
+
+bool register_recenter_hotkey(HWND hwnd) {
+    if (g_hotkey_registered) {
+        unregister_recenter_hotkey(hwnd);
+    }
+    
+    UINT modifiers, vk_code;
+    if (!parse_hotkey(g_recenter_hotkey, modifiers, vk_code)) {
+        std::cerr << "[WARNING] Invalid hotkey format: " << g_recenter_hotkey << std::endl;
+        return false;
+    }
+    
+    if (RegisterHotKey(hwnd, WM_HOTKEY_RECENTER, modifiers, vk_code)) {
+        g_hotkey_registered = true;
+        std::cout << "[INFO] Registered recenter hotkey: " << g_recenter_hotkey << std::endl;
+        return true;
+    } else {
+        DWORD error = GetLastError();
+        std::cerr << "[WARNING] Failed to register hotkey: " << g_recenter_hotkey 
+                  << " (modifiers=0x" << std::hex << modifiers 
+                  << ", vk_code=0x" << vk_code 
+                  << ", error=" << std::dec << error << ")" << std::endl;
+        return false;
+    }
+}
+
+void unregister_recenter_hotkey(HWND hwnd) {
+    if (g_hotkey_registered) {
+        UnregisterHotKey(hwnd, WM_HOTKEY_RECENTER);
+        g_hotkey_registered = false;
+    }
+}
+
+void load_hotkey_from_settings() {
+    std::ifstream f("settings.json");
+    if (!f) return;
+    
+    try {
+        nlohmann::json j;
+        f >> j;
+        
+        if (j.contains("recenter_hotkey") && j["recenter_hotkey"].is_string()) {
+            g_recenter_hotkey = j["recenter_hotkey"].get<std::string>();
+            std::cout << "[INFO] Loaded recenter hotkey: " << g_recenter_hotkey << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[WARNING] Could not parse recenter_hotkey from settings.json: " << e.what() << std::endl;
+    }
+}
+
 bool is_condor_process_running() {
     HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hProcessSnap == INVALID_HANDLE_VALUE) {
@@ -213,6 +388,121 @@ bool is_condor_process_running() {
     
     CloseHandle(hProcessSnap);
     return condor_found;
+}
+
+// Structure to pass data to window enumeration callback
+struct WindowEnumData {
+    DWORD processId;
+    bool hasSimWindow;
+    std::string simWindowTitle;
+};
+
+// Callback function for EnumWindows
+BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
+    WindowEnumData* data = reinterpret_cast<WindowEnumData*>(lParam);
+    
+    DWORD windowProcessId;
+    GetWindowThreadProcessId(hwnd, &windowProcessId);
+    
+    // Only check windows from the Condor process
+    if (windowProcessId != data->processId) {
+        return TRUE; // Continue enumeration
+    }
+    
+    // Skip if window is not visible
+    if (!IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+    
+    // Get window title
+    char windowTitle[256];
+    if (GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle)) == 0) {
+        return TRUE; // Continue if no title
+    }
+    
+    std::string title = windowTitle;
+    std::transform(title.begin(), title.end(), title.begin(), ::tolower);
+    
+    // Look for simulation window characteristics:
+    // - Contains "condor" and version info (like "condor version 3.0.8")
+    // - Has substantial size (simulation windows are typically large)
+    // - Exclude obvious setup/menu windows
+    if (title.find("condor") != std::string::npos && 
+        title.find("version") != std::string::npos) {
+        
+        // Check window size to distinguish sim window from small dialogs
+        RECT rect;
+        if (GetWindowRect(hwnd, &rect)) {
+            int width = rect.right - rect.left;
+            int height = rect.bottom - rect.top;
+            
+            // Simulation windows are typically large (>= 800x600)
+            if (width >= 800 && height >= 600) {
+                data->hasSimWindow = true;
+                data->simWindowTitle = windowTitle;
+                return FALSE; // Stop enumeration, found what we need
+            }
+        }
+    }
+    
+    return TRUE; // Continue enumeration
+}
+
+// Debug callback to log all Condor-related windows
+BOOL CALLBACK FindCondorWindowProc(HWND hwnd, LPARAM lParam) {
+    char windowTitle[256];
+    char className[256];
+    wchar_t displayName[256];
+    
+    // Get window title and class name
+    GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle));
+    GetClassNameA(hwnd, className, sizeof(className));
+    
+    // Try to get the display name (what taskbar shows)
+    std::string display_title;
+    if (GetWindowTextW(hwnd, displayName, sizeof(displayName)/sizeof(wchar_t))) {
+        // Convert wide string to regular string
+        int size = WideCharToMultiByte(CP_UTF8, 0, displayName, -1, nullptr, 0, nullptr, nullptr);
+        if (size > 0) {
+            std::vector<char> buffer(size);
+            WideCharToMultiByte(CP_UTF8, 0, displayName, -1, buffer.data(), size, nullptr, nullptr);
+            display_title = buffer.data();
+        }
+    }
+    
+    std::string title = windowTitle;
+    std::string class_name = className;
+    std::string title_lower = title;
+    std::transform(title_lower.begin(), title_lower.end(), title_lower.begin(), ::tolower);
+    
+    // Log any window that contains "condor" for debugging (even empty titles if class matches)
+    bool isCondorRelated = (title_lower.find("condor") != std::string::npos) || 
+                          (class_name.find("Condor") != std::string::npos);
+    
+    if (isCondorRelated && IsWindowVisible(hwnd)) {
+        RECT rect;
+        if (GetWindowRect(hwnd, &rect)) {
+            int width = rect.right - rect.left;
+            int height = rect.bottom - rect.top;
+            
+            // Look for simulation window - use class name for reliable detection
+            if (title_lower.find("condor") != std::string::npos && 
+                title_lower.find("version") != std::string::npos) {
+                // Simulation window has main window class (not TGUIForm or TApplication)
+                if (class_name != "TGUIForm" && class_name != "TApplication" && width > 100 && height > 100) {
+                    *reinterpret_cast<bool*>(lParam) = true;
+                    return FALSE; // Stop enumeration
+                }
+            }
+        }
+    }
+    return TRUE; // Continue enumeration
+}
+
+bool is_condor_simulation_window_active() {
+    bool found = false;
+    EnumWindows(FindCondorWindowProc, reinterpret_cast<LPARAM>(&found));
+    return found;
 }
 
 sf::Music* get_or_create_sound_player(const std::string& audio_file) {
@@ -364,8 +654,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             break;
 
+        case WM_HOTKEY:
+            if (wParam == WM_HOTKEY_RECENTER) {
+                std::cout << "[INFO] Recenter hotkey pressed" << std::endl;
+                if (g_ovr_session) {
+                    // Try hardware recenter first
+                    ovrResult result = ovr_RecenterTrackingOrigin(g_ovr_session);
+                    if (OVR_SUCCESS(result)) {
+                        std::cout << "[INFO] Hardware recenter attempted" << std::endl;
+                    }
+                    
+                    // Also reset Quest Lookout's internal tracking reference
+                    extern bool g_request_software_recenter;
+                    g_request_software_recenter = true;
+                    std::cout << "[INFO] Quest Lookout tracking reference reset requested" << std::endl;
+                } else {
+                    std::cout << "[WARNING] Cannot recenter: Oculus session not available" << std::endl;
+                }
+            }
+            break;
+
         case WM_DESTROY:
             if (g_is_console_visible) HideConsoleWindow(); 
+            unregister_recenter_hotkey(hwnd);
             Shell_NotifyIcon(NIM_DELETE, &nidApp); 
             PostQuitMessage(0); 
             break;
@@ -426,6 +737,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     if (!Shell_NotifyIcon(NIM_ADD, &nidApp)) {
         MessageBox(NULL, "Failed to add tray icon!", "Error!", MB_ICONEXCLAMATION | MB_OK);
     }
+    
+    // Load and register hotkey for recentering (must be in main thread)
+    load_hotkey_from_settings();
+    register_recenter_hotkey(g_hwnd);
     
     std::thread core_logic_thread(app_core_logic);
     
@@ -498,6 +813,7 @@ int app_core_logic()
         
         // Success!
         std::cout << "[INFO] OVR Session Created - HMD connected and ready!" << std::endl;
+        g_ovr_session = session;  // Store in global for hotkey access
         break;
     }
     
@@ -524,58 +840,17 @@ int app_core_logic()
         return 1; 
     }
 
-    std::string condor_log_path = "C:\\Condor3\\Logs\\Logfile.txt"; 
-    {
-        std::ifstream f("settings.json");
-        if (f) {
-            nlohmann::json j;
-            try { 
-                f >> j; 
-                if (j.contains("condor_log_path") && j["condor_log_path"].is_string()) {
-                    condor_log_path = j["condor_log_path"].get<std::string>();
-                }
-            } catch (const nlohmann::json::parse_error& e) {
-                std::cerr << "[WARNING] Could not parse condor_log_path from settings.json: " << e.what() << ". Using default." << std::endl;
-            } catch (const nlohmann::json::type_error& e) {
-                 std::cerr << "[WARNING] Type error for condor_log_path in settings.json: " << e.what() << ". Using default." << std::endl;
-            }
-        }
-    }
-    std::cout << "[INFO] Monitoring Condor log at: " << condor_log_path << std::endl;
+    std::cout << "[INFO] Monitoring Condor simulation windows for flight detection" << std::endl;
     
-    bool condor_flight_active = false; 
-    std::streampos last_log_pos = 0;
-    {
-        std::ifstream log_check(condor_log_path, std::ios::in | std::ios::ate | std::ios::binary);
-        if (log_check) {
-            last_log_pos = log_check.tellg();
-            log_check.seekg(0, std::ios::beg); 
-            std::string line;
-            std::string last_relevant_event_type;
-            while (std::getline(log_check, line)) {
-                if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
-                    last_relevant_event_type = "ENTERED";
-                } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
-                    last_relevant_event_type = "LEAVING";
-                }
-            }
-            
-            // Check if Condor process is running and log shows flight active
-            bool condor_process_running = is_condor_process_running();
-            bool log_shows_flight_active = (last_relevant_event_type == "ENTERED");
-            
-            condor_flight_active = (condor_process_running && log_shows_flight_active);
-            
-            if (log_shows_flight_active && !condor_process_running) {
-                std::cout << "[INFO] Log shows 'ENTERED SIMULATION' but Condor process not running. Not starting in active state." << std::endl;
-            } else if (!log_shows_flight_active && condor_process_running) {
-                std::cout << "[INFO] Condor process running but no active flight in log. Not starting in active state." << std::endl;
-            }
-            std::cout << "[INFO] Initial Condor flight status: " << (condor_flight_active ? "Active." : "Inactive.") << std::endl;
-        } else {
-            std::cerr << "[WARNING] Could not open Condor log for initial status check: " << condor_log_path << std::endl;
-        }
+    // Check initial Condor flight status using window detection only
+    bool condor_flight_active = is_condor_simulation_window_active();
+    
+    if (condor_flight_active) {
+        std::cout << "[INFO] Condor simulation window detected - flight active." << std::endl;
+    } else {
+        std::cout << "[INFO] No Condor simulation window detected - flight inactive." << std::endl;
     }
+    std::cout << "[INFO] Initial Condor flight status: " << (condor_flight_active ? "Active." : "Inactive.") << std::endl;
     
     std::cout << "Oculus Lookout Utility core logic started." << std::endl;
     for (size_t i = 0; i < alarms.size(); ++i) { 
@@ -660,82 +935,21 @@ int app_core_logic()
         bool check_log_this_iteration = (log_check_timer_ms >= LOG_CHECK_INTERVAL * 1000.0);
         
         if (check_log_this_iteration) {
-            log_check_timer_ms = 0.0; // Reset the log check timer
+            log_check_timer_ms = 0.0; // Reset the flight check timer
             
-            // --- Monitor Condor log for flight status ---
+            // --- Monitor Condor simulation window for flight status ---
             bool previous_iteration_flight_status = condor_flight_active;
-
-        std::ifstream log_stream(condor_log_path, std::ios::in | std::ios::ate | std::ios::binary);
-
-        if (log_stream) {
-            std::streampos current_file_size = log_stream.tellg();
+            bool condor_sim_window_active = is_condor_simulation_window_active();
             
-            // Check if Condor process is still running
-            bool condor_process_running = is_condor_process_running();
-            
-            if (!condor_process_running && condor_flight_active) {
-                std::cout << "[INFO] Condor process no longer running. Assuming flight ended." << std::endl;
-                condor_flight_active = false;
-            }
-
-            if (current_file_size < last_log_pos) { 
-                std::cout << "[INFO] Condor log file truncated/rotated. Resetting scan position." << std::endl;
-                last_log_pos = 0; 
-            }
-
-            std::string latest_event_type_found_in_scan = ""; 
-
-            if (last_log_pos == 0 && current_file_size > 0) { 
-                log_stream.clear(); 
-                log_stream.seekg(0, std::ios::beg);
-                std::string line;
-                while (std::getline(log_stream, line)) {
-                    if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
-                        latest_event_type_found_in_scan = "ENTERED";
-                    } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
-                        latest_event_type_found_in_scan = "LEAVING";
-                    }
-                }
-            } else if (current_file_size > last_log_pos) { 
-                log_stream.clear(); 
-                log_stream.seekg(last_log_pos, std::ios::beg);
-                std::string line;
-                while (std::getline(log_stream, line)) { 
-                    if (line.find("ENTERED SIMULATION AT") != std::string::npos) {
-                        latest_event_type_found_in_scan = "ENTERED";
-                    } else if (line.find("LEAVING SIMULATION AT") != std::string::npos) {
-                        latest_event_type_found_in_scan = "LEAVING";
-                    }
-                }
-            }
-
-            if (!latest_event_type_found_in_scan.empty()) {
-                if (latest_event_type_found_in_scan == "ENTERED") {
-                    // Set active if both process running and log shows ENTERED
-                    condor_flight_active = condor_process_running;
-                    if (!condor_process_running) {
-                        std::cout << "[INFO] Found 'ENTERED SIMULATION' but Condor process not running. Not starting flight monitoring." << std::endl;
-                    }
-                } else if (latest_event_type_found_in_scan == "LEAVING") {
-                    condor_flight_active = false;
-                }
-            } else {
-                if ((last_log_pos == 0 && current_file_size > 0 && latest_event_type_found_in_scan.empty()) || current_file_size == 0) { // If full scan yielded nothing or file empty
-                     condor_flight_active = false;
-                }
-            }
-            last_log_pos = current_file_size; 
-
-        } else { 
-            if (condor_flight_active) { 
-                std::cerr << "[WARNING] Could not access Condor log file. Assuming flight ended." << std::endl;
-                condor_flight_active = false;
-            }
-        }
+            // Simple window-based flight detection
+            condor_flight_active = condor_sim_window_active;
 
         if (condor_flight_active != previous_iteration_flight_status) {
             if (condor_flight_active) {
                 std::cout << "[INFO] Detected Condor flight start." << std::endl;
+                // Automatically apply software recenter on flight start (capture current head position as forward)
+                g_request_baseline_reset = true;
+                std::cout << "[INFO] Auto-recentering to current head position for flight start" << std::endl;
             } else {
                 std::cout << "[INFO] Detected Condor flight end. Resetting alarms." << std::endl;
                 for (AlarmState& s : alarm_states) {
@@ -767,12 +981,50 @@ int app_core_logic()
         ovrSessionStatus sessionStatus;
         ovrResult session_status_result = ovr_GetSessionStatus(session, &sessionStatus);
         
-        // Check if session became invalid (HMD disconnected)
-        if (OVR_FAILURE(session_status_result) || !sessionStatus.IsVisible) {
+        // Check for Oculus recenter trigger through ShouldRecenter flag
+        static bool last_should_recenter = false;
+        if (sessionStatus.ShouldRecenter && !last_should_recenter) {
+            std::cout << "[INFO] Oculus recenter detected - triggering software recenter" << std::endl;
+            g_request_baseline_reset = true;
+        }
+        last_should_recenter = sessionStatus.ShouldRecenter;
+
+        // Handle baseline reference reset request
+        if (g_request_baseline_reset && (ts.StatusFlags & ovrStatus_OrientationTracked)) {
+            g_baseline_reference = ts.HeadPose.ThePose.Orientation;
+            g_has_baseline_reference = true;
+            g_request_baseline_reset = false;
+            std::cout << "[INFO] Baseline reference captured - new forward direction set" << std::endl;
+        }
+        
+        // Handle software recenter request
+        if (g_request_software_recenter && (ts.StatusFlags & ovrStatus_OrientationTracked)) {
+            // Calculate current yaw (rotation around Y axis)
+            ovrQuatf currentOrientation = ts.HeadPose.ThePose.Orientation;
+            
+            // Extract yaw from quaternion (simplified for Y-axis rotation)
+            float currentYaw = atan2(2.0f * (currentOrientation.w * currentOrientation.y + currentOrientation.x * currentOrientation.z),
+                                   1.0f - 2.0f * (currentOrientation.y * currentOrientation.y + currentOrientation.z * currentOrientation.z));
+            
+            // Create offset quaternion to counter current yaw
+            g_recenter_offset.x = 0;
+            g_recenter_offset.y = sin(-currentYaw / 2.0f);
+            g_recenter_offset.z = 0;
+            g_recenter_offset.w = cos(-currentYaw / 2.0f);
+            
+            std::cout << "[INFO] Manual software recenter applied - yaw offset: " << (-currentYaw * 180.0f / M_PI) << " degrees" << std::endl;
+            g_has_manual_recenter_offset = true;
+            g_request_software_recenter = false;
+        }
+        
+        
+        // Check if session became invalid (actual API failure)
+        if (OVR_FAILURE(session_status_result)) {
             std::cout << "[WARNING] HMD session lost. Attempting to reconnect..." << std::endl;
             
             // Try to recreate the session
             ovr_Destroy(session);
+            g_ovr_session = nullptr;  // Clear global since session is destroyed
             ovrGraphicsLuid luid;
             ovrResult recreate_result = ovr_Create(&session, &luid);
             
@@ -793,6 +1045,7 @@ int app_core_logic()
                 continue;
             } else {
                 std::cout << "[INFO] HMD session restored successfully!" << std::endl;
+                g_ovr_session = session;  // Update global for hotkey access
                 // Re-get the tracking data with new session
                 displayTime = ovr_GetPredictedDisplayTime(session, 0);
                 ts = ovr_GetTrackingState(session, displayTime, ovrTrue);
