@@ -51,10 +51,15 @@ bool parse_hotkey(const std::string& hotkey_str, UINT& modifiers, UINT& vk_code)
 bool register_recenter_hotkey(HWND hwnd);
 void unregister_recenter_hotkey(HWND hwnd);
 void load_hotkey_from_settings();
+bool is_condor_simulation_window_active();
+LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 
 // Hotkey globals (declared early for function access)
 std::string g_recenter_hotkey = "Num5";
 bool g_hotkey_registered = false;
+HHOOK g_keyboard_hook = nullptr;
+UINT g_target_vk_code = 0;
+UINT g_target_modifiers = 0;
 
 // Oculus session global (for hotkey access)
 ovrSession g_ovr_session = nullptr;
@@ -311,34 +316,78 @@ bool parse_hotkey(const std::string& hotkey_str, UINT& modifiers, UINT& vk_code)
     return vk_code != 0;
 }
 
+// Low-level keyboard hook procedure
+LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0 && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+        KBDLLHOOKSTRUCT* pKeyboard = (KBDLLHOOKSTRUCT*)lParam;
+        
+        // Check if this is our target key
+        if (pKeyboard->vkCode == g_target_vk_code) {
+            // Check modifiers
+            bool ctrl_pressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool shift_pressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            bool alt_pressed = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            
+            UINT current_modifiers = 0;
+            if (ctrl_pressed) current_modifiers |= MOD_CONTROL;
+            if (shift_pressed) current_modifiers |= MOD_SHIFT;
+            if (alt_pressed) current_modifiers |= MOD_ALT;
+            
+            // Only trigger if modifiers match AND Condor simulation is active
+            if (current_modifiers == g_target_modifiers && is_condor_simulation_window_active()) {
+                std::cout << "[INFO] Recenter hotkey pressed (non-blocking)" << std::endl;
+                if (g_ovr_session) {
+                    // Try hardware recenter first
+                    ovrResult result = ovr_RecenterTrackingOrigin(g_ovr_session);
+                    if (OVR_SUCCESS(result)) {
+                        std::cout << "[INFO] Hardware recenter attempted" << std::endl;
+                    }
+                    
+                    // Also reset Quest Lookout's internal tracking reference
+                    g_request_software_recenter = true;
+                    std::cout << "[INFO] Quest Lookout tracking reference reset requested" << std::endl;
+                } else {
+                    std::cout << "[WARNING] Cannot recenter: Oculus session not available" << std::endl;
+                }
+                // Don't block the key - let it pass through to other applications
+            }
+        }
+    }
+    
+    // Always call next hook (don't block the key)
+    return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
+}
+
 bool register_recenter_hotkey(HWND hwnd) {
     if (g_hotkey_registered) {
         unregister_recenter_hotkey(hwnd);
     }
     
-    UINT modifiers, vk_code;
-    if (!parse_hotkey(g_recenter_hotkey, modifiers, vk_code)) {
+    if (!parse_hotkey(g_recenter_hotkey, g_target_modifiers, g_target_vk_code)) {
         std::cerr << "[WARNING] Invalid hotkey format: " << g_recenter_hotkey << std::endl;
         return false;
     }
     
-    if (RegisterHotKey(hwnd, WM_HOTKEY_RECENTER, modifiers, vk_code)) {
+    // Install low-level keyboard hook (non-blocking)
+    g_keyboard_hook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
+    if (g_keyboard_hook) {
         g_hotkey_registered = true;
-        std::cout << "[INFO] Registered recenter hotkey: " << g_recenter_hotkey << std::endl;
+        std::cout << "[INFO] Registered non-blocking recenter hotkey: " << g_recenter_hotkey << std::endl;
         return true;
     } else {
         DWORD error = GetLastError();
-        std::cerr << "[WARNING] Failed to register hotkey: " << g_recenter_hotkey 
-                  << " (modifiers=0x" << std::hex << modifiers 
-                  << ", vk_code=0x" << vk_code 
-                  << ", error=" << std::dec << error << ")" << std::endl;
+        std::cerr << "[WARNING] Failed to install keyboard hook for hotkey: " << g_recenter_hotkey 
+                  << " (error=" << error << ")" << std::endl;
         return false;
     }
 }
 
 void unregister_recenter_hotkey(HWND hwnd) {
     if (g_hotkey_registered) {
-        UnregisterHotKey(hwnd, WM_HOTKEY_RECENTER);
+        if (g_keyboard_hook) {
+            UnhookWindowsHookEx(g_keyboard_hook);
+            g_keyboard_hook = nullptr;
+        }
         g_hotkey_registered = false;
     }
 }
@@ -552,6 +601,7 @@ sf::Music* get_or_create_sound_player(const std::string& audio_file) {
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_EXIT_CONTEXT_MENU_ITEM 1002
 #define ID_TRAY_TOGGLE_CONSOLE_ITEM 1003
+#define ID_TRAY_SETTINGS_ITEM 1004
 
 const char* const WINDOW_CLASS_NAME = "QuestLookoutWindowClass";
 HWND g_hwnd;
@@ -617,6 +667,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     POINT curPoint;
                     GetCursorPos(&curPoint);
                     HMENU hPopupMenu = CreatePopupMenu();
+                    InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_BYPOSITION | MF_STRING, ID_TRAY_SETTINGS_ITEM, "Settings");
+                    InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_SEPARATOR, 0, NULL); 
                     InsertMenu(hPopupMenu, 0xFFFFFFFF, MF_BYPOSITION | MF_STRING, 
                                ID_TRAY_TOGGLE_CONSOLE_ITEM, 
                                g_is_console_visible ? "Hide Status Window" : "Show Status Window"); 
@@ -641,6 +693,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     std::cout << "[INFO] Exit requested from tray menu. Shutting down." << std::endl;
                     DestroyWindow(hwnd); 
                     break;
+                case ID_TRAY_SETTINGS_ITEM:
+                    std::cout << "[INFO] Opening settings from tray menu." << std::endl;
+                    ShellExecute(NULL, "open", "settings_gui.exe", NULL, NULL, SW_SHOWNORMAL);
+                    break;
                 case ID_TRAY_TOGGLE_CONSOLE_ITEM:
                     if (g_is_console_visible)
                     {
@@ -654,25 +710,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             break;
 
-        case WM_HOTKEY:
-            if (wParam == WM_HOTKEY_RECENTER) {
-                std::cout << "[INFO] Recenter hotkey pressed" << std::endl;
-                if (g_ovr_session) {
-                    // Try hardware recenter first
-                    ovrResult result = ovr_RecenterTrackingOrigin(g_ovr_session);
-                    if (OVR_SUCCESS(result)) {
-                        std::cout << "[INFO] Hardware recenter attempted" << std::endl;
-                    }
-                    
-                    // Also reset Quest Lookout's internal tracking reference
-                    extern bool g_request_software_recenter;
-                    g_request_software_recenter = true;
-                    std::cout << "[INFO] Quest Lookout tracking reference reset requested" << std::endl;
-                } else {
-                    std::cout << "[WARNING] Cannot recenter: Oculus session not available" << std::endl;
-                }
-            }
-            break;
 
         case WM_DESTROY:
             if (g_is_console_visible) HideConsoleWindow(); 

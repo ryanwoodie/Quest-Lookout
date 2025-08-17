@@ -311,13 +311,9 @@ class QuestLookoutGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Quest Lookout Settings Manager v1.0")
-        self.root.geometry("800x700")
         
-        # Center window
-        self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (800 // 2)
-        y = (self.root.winfo_screenheight() // 2) - (700 // 2)
-        self.root.geometry(f"800x700+{x}+{y}")
+        # Set minimum window size but allow it to expand
+        self.root.minsize(900, 750)
         
         self.settings = {
             'alarms': [],
@@ -328,6 +324,18 @@ class QuestLookoutGUI:
         
         self.create_widgets()
         self.load_settings()
+        
+        # Auto-size window to fit content after widgets are created
+        self.root.update_idletasks()
+        self.root.geometry("")  # Let tkinter auto-size
+        
+        # Center window after auto-sizing
+        self.root.update_idletasks()
+        width = self.root.winfo_reqwidth()
+        height = self.root.winfo_reqheight()
+        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.root.winfo_screenheight() // 2) - (height // 2)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
         
     def create_widgets(self):
         # Title
@@ -430,8 +438,12 @@ class QuestLookoutGUI:
                     "Quest Lookout to apply changes.")
         ttk.Label(info_frame, text=info_text, font=('Arial', 8), justify=tk.LEFT).pack()
         
-        # Exit button
-        ttk.Button(right_frame, text="Exit", command=self.root.quit).pack(fill=tk.X, pady=10)
+        # Exit buttons frame
+        exit_frame = ttk.Frame(right_frame)
+        exit_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(exit_frame, text="Save & Exit", command=self.save_and_exit).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
+        ttk.Button(exit_frame, text="Exit", command=self.exit_without_saving).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5,0))
     
     def update_alarms_list(self):
         self.alarms_listbox.delete(0, tk.END)
@@ -634,6 +646,26 @@ class QuestLookoutGUI:
                 print(f"[WARNING] Could not sync startup setting during reset: {e}")
             
             messagebox.showinfo("Reset Complete", "Settings reset to defaults.")
+    
+    def save_and_exit(self):
+        """Save settings and exit"""
+        try:
+            # Update settings from UI
+            self.settings['center_reset']['window_degrees'] = float(self.reset_window_var.get())
+            self.settings['center_reset']['hold_time_seconds'] = float(self.reset_hold_var.get())
+            self.settings['recenter_hotkey'] = self.recenter_hotkey_var.get()
+            
+            with open('settings.json', 'w') as f:
+                json.dump(self.settings, f, indent=2)
+            
+            self.root.quit()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings:\n{e}")
+    
+    def exit_without_saving(self):
+        """Exit without saving changes"""
+        if messagebox.askyesno("Exit Without Saving", "Exit without saving changes?"):
+            self.root.quit()
     
     def run(self):
         self.root.mainloop()

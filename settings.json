@@ -32,5 +32,5 @@
     "hold_time_seconds": 4.0
   },
   "start_with_windows": true,
-  "recenter_hotkey": "Ctrl+Shift+5"
+  "recenter_hotkey": "Num5"
 }

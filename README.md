@@ -18,31 +18,34 @@ VR flight simulation can cause **reduced situational awareness** compared to rea
 3. **Run `setup.bat`** for guided first-time configuration
 
 ### Step 2: Configure Your Alarms  
-1. **Launch** `settings_manager.bat` to open the configuration GUI
+1. **Launch** `settings_gui.exe` to open the configuration GUI
 2. **Add/edit alarms** with different sensitivity levels:
    - **Gentle reminder**: 45° lookout every 30 seconds
    - **Comprehensive scan**: 120° lookout every 90 seconds  
-3. **Customize audio files** and volume settings
+3. **Customize audio files**, volume settings, and recenter hotkey
 4. **Save settings** and close the GUI
 
 ### Step 3: Start Flying Safely
 1. **Launch Quest Lookout**: Run `lookout.exe` 
-2. **Check system tray**: Look for the Quest Lookout icon
+2. **Check system tray**: Look for the Quest Lookout icon (right-click for Settings)
 3. **Start Condor**: Launch your flight simulation
 4. **Fly with awareness**: Perform lookouts when prompted
+5. **Use recenter hotkey**: Press your configured hotkey to recenter VR tracking
 
 ## ⚙️ How It Works
 
-- **Automatic Activation**: Only monitors during active Condor flights
+- **Automatic Activation**: Only monitors during active Condor flights (detects simulation window)
 - **Head Tracking**: Uses Oculus SDK to monitor your actual head position
 - **Smart Alerts**: When you start looking around, alarms pause to let you complete the scan
+- **VR Recenter Integration**: Hotkey support for recentering VR tracking during flight
 - **Multiple Sensitivity Levels**: Configure different alarms for various flight scenarios
-- **Background Operation**: Runs silently in system tray
+- **Background Operation**: Runs silently in system tray with easy access to settings
 
 ## 🔧 Configuration
 
 **Easy GUI Setup** (Recommended):
-- Run `settings_manager.bat` for point-and-click configuration
+- Run `settings_gui.exe` for point-and-click configuration
+- Right-click the system tray icon and select "Settings"
 - Hover over any setting for detailed tooltips
 - Add/remove/duplicate alarms as needed
 
@@ -56,7 +59,6 @@ VR flight simulation can cause **reduced situational awareness** compared to rea
 |------|---------|
 | `lookout.exe` | Main VR safety monitor |
 | `settings_gui.exe` | Configuration tool (no Python required) |
-| `settings_manager.bat` | Easy launcher for GUI |
 | `setup.bat` | First-time setup assistant |
 | `settings_default.json` | Default configuration template |
 | Audio files (`.ogg`, `.wav`) | Alarm sound files |
@@ -68,17 +70,17 @@ VR flight simulation can cause **reduced situational awareness** compared to rea
 - Check that `settings.json` exists (run `setup.bat` if missing)
 
 **No alarms during flight:**
-- Verify Condor log path in settings matches your installation
 - Make sure Condor is actually running a simulation (not just menu)
 - Check alarm requirements aren't too restrictive
+- Verify that the Condor simulation window is visible and active
 
 **Lookout directions seem wrong:**
-- **Important**: Make sure your Quest center matches Condor's view center
-- If you center VR in Condor but it's not aligned with Quest center, you may be looking the wrong way
-- Re-center your Quest headset first, then center the view in Condor to match
+- **Important**: Use the recenter hotkey to align your VR tracking
+- Quest Lookout automatically recenters when you start a flight
+- You can manually recenter anytime using your configured hotkey (default: Num5)
 
 **Can't configure settings:**
-- Run `settings_manager.bat` to launch the GUI
+- Run `settings_gui.exe` directly or right-click the system tray icon
 - For manual editing, ensure `settings.json` is valid JSON format
 
 ---
